@@ -8,8 +8,9 @@ import Foundation
 /// - end the clip after `silenceSeconds` without loud sounds, trimming the quiet tail;
 /// - split clips at 20 minutes.
 ///
-/// Not thread-safe: use it from one serial queue only.
-final class Detector {
+/// Not thread-safe: use it from one serial queue only (the recorder's audio queue).
+/// Marked `@unchecked Sendable` because that queue is what keeps access safe.
+final class Detector: @unchecked Sendable {
     enum Phase { case calibrating, listening, recording }
 
     struct Update {

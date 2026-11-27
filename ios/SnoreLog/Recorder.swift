@@ -160,7 +160,7 @@ final class Recorder: ObservableObject {
     nonisolated private static func makeDetector(sensitivity: Double, silence: Double,
                                                  recordingsDir: URL, recorder: Recorder) -> Detector {
         let det = Detector(sensitivity: sensitivity, silenceSeconds: silence)
-        weak var weakRecorder = recorder
+        weak let weakRecorder = recorder
         det.onUpdate = { update in
             let r = weakRecorder
             Task { @MainActor in r?.apply(update) }
