@@ -112,6 +112,8 @@ details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size
 .version span{text-transform:uppercase;letter-spacing:.07em;font-family:var(--font);font-size:11px;margin-right:4px}
 .version b{font-weight:500;color:var(--text)}
 .version a{color:var(--moon);text-decoration:none}
+.logView{font:11px/1.45 var(--mono);color:var(--muted);white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;margin:10px 0 0;user-select:text;-webkit-user-select:text}
+#diagPanel .actions{margin-top:8px}
 #dim{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#3b4160}
 #dim .big{font:300 56px var(--mono);font-variant-numeric:tabular-nums}
 #dim .sub{font-size:14px}
@@ -185,6 +187,16 @@ details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size
     <div><span>Committed</span> <b id="vBuilt">—</b></div>
     <div><span>Loaded</span> <b id="vLoaded">—</b></div>
   </footer>
+
+  <details class="tips" id="diagPanel">
+    <summary>Diagnostics</summary>
+    <p class="hint">A log of what the microphone and audio did. If something goes wrong, tap Copy log and paste it to whoever is helping you.</p>
+    <div class="actions">
+      <button class="ghost" id="copyLog">Copy log</button>
+      <button class="ghost" id="clearLog">Clear</button>
+    </div>
+    <pre id="logView" class="logView"></pre>
+  </details>
 </main>
 
 <div id="dim" hidden>
@@ -253,9 +265,9 @@ const MIN_GAP_MS = 5000;
 
 function watchTracks(stream) {
   stream.getAudioTracks().forEach(t => {
-    t.onended = () => { if (stream === S.stream) micLost(); };
-    t.onmute = () => { if (stream === S.stream) micLost(); };
-    t.onunmute = () => { if (stream === S.stream && S.ctx) S.ctx.resume().catch(() => {}); };
+    t.onended = () => { log(`track ended${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream === S.stream) micLost(); };
+    t.onmute = () => { log(`track muted${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream === S.stream) micLost(); };
+    t.onunmute = () => { log(`track unmuted${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream === S.stream && S.ctx) S.ctx.resume().catch(() => {}); };
   });
 }
 
@@ -268,7 +280,10 @@ function wire(ctx, stream) {
   S.sink = ctx.createGain(); S.sink.gain.value = 0;
   S.src.connect(S.node); S.node.connect(S.sink); S.sink.connect(ctx.destination);
   S.node.onaudioprocess = onAudio;
+  S.firstBuf = true;
+  log(`audio chain built · rate=${ctx.sampleRate} · ${where()}`);
   ctx.onstatechange = () => {
+    log(`audio state → ${ctx.state}${ctx === S.ctx ? "" : " (old)"}`);
     if (ctx !== S.ctx || !S.running || ctx.state === "running") return;
     micLost(); ctx.resume().catch(() => {});
   };
@@ -300,8 +315,9 @@ async function start() {
   wire(ctx, stream);
   Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
     loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, mutedSince: 0, backSince: 0,
-    rebuilds: 0, clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
+    rebuilds: 0, gaveUpLogged: false, clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
   requestWake();
+  log(`START · ${where()}`);
   setNote("Measuring room noise for a few seconds… stay quiet.");
   render();
 }
@@ -309,6 +325,7 @@ async function start() {
 /* The mic went away (screen locked, app left, call, Siri, alarm): keep what we have and note the gap. */
 function micLost() {
   if (!S.running || !S.micOk) return;
+  log(`MIC LOST · ${where()}`);
   S.micOk = false;
   S.gapStart = S.lastAudio || Date.now();
   S.backSince = 0; S.rebuilds = 0;
@@ -321,6 +338,8 @@ function micLost() {
 
 /* Mic audio is flowing again: close the gap. */
 function micBack(now) {
+  log(`MIC BACK · ${where()}`);
+  S.gaveUpLogged = false;
   S.micOk = true; S.zeroMs = 0; S.mutedSince = 0; S.backSince = 0; S.rebuilds = 0;
   if (S.gapStart) {
     const start = S.gapStart; S.gapStart = null;
@@ -358,23 +377,30 @@ async function restartMic(fromTap) {
     const stuck = muted && now - S.mutedSince > 10000;
     const silent = !ended && !muted && now - Math.max(S.lastAudio, S.backSince) > 2500;
     if (!(fromTap || ended || stuck || silent)) { S.ctx && S.ctx.resume().catch(() => {}); return; }
-    if (!fromTap && S.rebuilds >= 4) return;          // stop retrying on our own; the Resume button stays available
+    if (!fromTap && S.rebuilds >= 4) {               // stop retrying on our own; the Resume button stays available
+      if (!S.gaveUpLogged) { S.gaveUpLogged = true; log("auto restart gave up after 4 tries; waiting for Resume tap"); }
+      return;
+    }
 
     const ctx = newContext();                          // made before any await so a tap counts as the user gesture
     const resumed = ctx.resume().catch(() => {});
     let stream = S.stream;
     const needNewMic = ended || muted || S.rebuilds >= 2 || (fromTap && S.rebuilds >= 1);
+    log(`restart #${S.rebuilds + 1} ${fromTap ? "(tap)" : "(auto)"} ended=${ended} muted=${muted} stuck=${stuck} silent=${silent} newMic=${needNewMic} · ${where()}`);
     if (needNewMic) {
       const old = stream;
       stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+      log(`new mic granted · track=${stream.getAudioTracks()[0] ? stream.getAudioTracks()[0].readyState + (stream.getAudioTracks()[0].muted ? "/muted" : "") : "none"}`);
       if (old && old !== stream) old.getTracks().forEach(t => t.stop());
     }
     unwire();
     await resumed;
     wire(ctx, stream);
     S.rebuilds++; S.backSince = Date.now(); S.mutedSince = 0;
+    log(`restart done · ${where()}`);
     requestWake();
   } catch (e) {
+    log(`restart FAILED: ${(e && e.name) || "error"} ${(e && e.message) || ""} · ${where()}`);
     setNote("Couldn't restart the microphone (" + ((e && e.name) || "error") + "). Tap Resume listening to try again.", true);
   } finally {
     S.restarting = false;
@@ -390,6 +416,7 @@ setInterval(() => {
 }, 2000);
 
 async function stop() {
+  log(`STOP · ${where()}`);
   if (S.running && !S.micOk && S.gapStart) { saveGap(S.gapStart, Date.now()); S.gapStart = null; }
   S.running = false;
   if (S.rec) finishClip(false);
@@ -408,6 +435,8 @@ function onAudio(e) {
   let sq = 0; for (let i = 0; i < input.length; i++) sq += input[i] * input[i];
   const db = 20 * Math.log10(Math.sqrt(sq / input.length) + 1e-9);
   const ms = input.length / e.inputBuffer.sampleRate * 1000, now = Date.now();
+  if (S.firstBuf) { S.firstBuf = false; log(`first audio data after build: ${sq === 0 ? "pure silence" : "sound " + Math.round(db) + " dB"}`); }
+  if (sq === 0 && S.zeroMs === 0) log(`audio data went silent (zeros) · ${where()}`);
   // A real microphone never delivers perfect digital silence; iOS does when it has taken the mic away.
   if (sq === 0) {
     S.zeroMs += ms;
@@ -496,11 +525,12 @@ async function requestWake() {
 function releaseWake() { try { S.wakeLock && S.wakeLock.release(); } catch {} S.wakeLock = null; }
 document.addEventListener("visibilitychange", () => {
   if (!S.running) return;
+  log(`screen ${document.visibilityState} · ${where()}`);
   if (document.visibilityState === "hidden") { S.mutedSince = 0; S.backSince = 0; micLost(); }   // iOS pauses the mic when the page leaves the screen
   else { requestWake(); restartMic(false); }
 });
 // Any tap counts as the user gesture iOS may want before audio can restart.
-$("resumeBtn").onclick = () => restartMic(true);
+$("resumeBtn").onclick = () => { log("Resume tapped"); restartMic(true); };
 function showDim() { $("dim").hidden = false; }
 function hideDim() { $("dim").hidden = true; }
 $("dim").onclick = () => { hideDim(); if (S.running && !S.micOk && S.gapStart) restartMic(true); };
@@ -513,6 +543,40 @@ const fmtDur = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Mat
 const fmtTime = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 const fmtClock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB";
+/* ---------- diagnostics log (kept on this phone only) ---------- */
+let LOG = [];
+try { LOG = JSON.parse(localStorage.getItem("snore.log") || "[]"); } catch {}
+let logSaveTimer = 0;
+function log(msg) {
+  const d = new Date();
+  const line = d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0") + " " + msg;
+  LOG.push(line); if (LOG.length > 400) LOG.splice(0, LOG.length - 400);
+  const v = $("logView"); if (v && $("diagPanel").open) v.textContent = LOG.join("\n");
+  clearTimeout(logSaveTimer);
+  logSaveTimer = setTimeout(() => { try { localStorage.setItem("snore.log", JSON.stringify(LOG)); } catch {} }, 500);
+}
+function trackInfo() {
+  const t = S.stream && S.stream.getAudioTracks()[0];
+  return !t ? "track=none" : `track=${t.readyState}${t.muted ? "/muted" : ""}${t.enabled ? "" : "/disabled"}`;
+}
+const where = () => `${trackInfo()} ctx=${S.ctx ? S.ctx.state : "none"} vis=${document.visibilityState} micOk=${!!S.micOk} restarts=${S.rebuilds || 0}`;
+$("diagPanel").addEventListener("toggle", () => { if ($("diagPanel").open) $("logView").textContent = LOG.join("\n"); });
+$("clearLog").onclick = () => { LOG = []; $("logView").textContent = ""; try { localStorage.removeItem("snore.log"); } catch {} };
+$("copyLog").onclick = async () => {
+  const head = `Snore Log ${$("vSha").textContent} · ${navigator.userAgent} · standalone=${!!(navigator.standalone || matchMedia("(display-mode: standalone)").matches)}`;
+  const text = head + "\n" + LOG.join("\n");
+  try { await navigator.clipboard.writeText(text); $("copyLog").textContent = "Copied"; setTimeout(() => $("copyLog").textContent = "Copy log", 2000); }
+  catch {
+    const v = $("logView"); v.textContent = text;
+    const r = document.createRange(); r.selectNodeContents(v); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    $("copyLog").textContent = "Selected – tap Copy";
+  }
+};
+["pagehide", "pageshow", "freeze", "resume", "focus", "blur"].forEach(ev =>
+  (ev === "focus" || ev === "blur" ? window : document).addEventListener(ev, e => { if (S.running) log(`event ${ev}${e.persisted ? " persisted" : ""} · ${where()}`); }));
+window.addEventListener("pageshow", e => { if (e.persisted) log("page restored from cache"); });
+log("page loaded · " + ($("vSha") ? "" : "") + navigator.userAgent.replace(/^.*?\(/, "(").slice(0, 80));
+
 function setNote(text, warn) { $("note").textContent = text; $("note").classList.toggle("warn", !!warn); }
 
 function render() {
