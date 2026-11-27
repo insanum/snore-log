@@ -251,6 +251,7 @@ function watchTracks() {
   S.stream.getAudioTracks().forEach(t => {
     t.onended = () => micLost();
     t.onmute = () => micLost();
+    t.onunmute = () => { if (S.ctx) S.ctx.resume().catch(() => {}); };
   });
 }
 
@@ -276,7 +277,7 @@ async function start() {
   };
   watchTracks();
   Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
-    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
+    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, mutedSince: 0, clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
   requestWake();
   setNote("Measuring room noise for a few seconds… stay quiet.");
   render();
@@ -289,17 +290,21 @@ function micLost() {
   S.gapStart = S.lastAudio || Date.now();
   if (S.rec) finishClip(false);
   S.pre = []; S.preSamples = 0; S.loudMs = 0;
-  setNote("The microphone stopped at " + fmtClock(S.gapStart) + ". It restarts when this screen is back on. Tap the screen if it doesn't.", true);
+  clearTimeout(S.noteTimer);
+  setNote("Mic paused at " + fmtClock(S.gapStart) + ". It restarts when Snore Log is back on screen. Tap the screen if it doesn't.", true);
   render();
 }
 
 /* Mic audio is flowing again: close the gap. */
 function micBack(now) {
-  S.micOk = true; S.zeroMs = 0;
+  S.micOk = true; S.zeroMs = 0; S.mutedSince = 0;
   if (S.gapStart) {
     const start = S.gapStart; S.gapStart = null;
     saveGap(start, now);
-    setNote("Listening again. The mic was off from " + fmtClock(start) + " to " + fmtClock(now) + ".");
+    const msg = "Back to listening. Nothing was recorded from " + fmtTime(start) + " to " + fmtTime(now) + "; that gap is marked in the list.";
+    setNote(msg);
+    clearTimeout(S.noteTimer);
+    S.noteTimer = setTimeout(() => { if (S.running && S.micOk && $("note").textContent === msg) setNote("Listening. Recording starts automatically when a sound is detected."); }, 20000);
   }
   render();
 }
@@ -314,8 +319,16 @@ async function restartMic() {
   if (!S.running || S.micOk || S.restarting) return;
   S.restarting = true;
   try {
-    const live = S.stream && S.stream.getAudioTracks().some(t => t.readyState === "live" && !t.muted);
-    if (!live) {
+    // When the app goes to the background, iOS pauses (mutes) the mic rather than ending it, and un-pauses it on return.
+    // Asking for a new mic makes iOS show the permission prompt again, so only do that if the mic has really ended,
+    // or if it is still paused well after the app came back.
+    const tracks = S.stream ? S.stream.getAudioTracks() : [];
+    const ended = !tracks.some(t => t.readyState === "live");
+    const muted = !ended && tracks.every(t => t.muted);
+    if (muted && !S.mutedSince) S.mutedSince = Date.now();
+    const stuck = muted && Date.now() - S.mutedSince > 10000;
+    if (ended || stuck) {
+      S.mutedSince = 0;
       try { S.src && S.src.disconnect(); } catch {}
       S.stream && S.stream.getTracks().forEach(t => t.stop());
       S.stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
@@ -365,7 +378,9 @@ function onAudio(e) {
     S.zeroMs = 0;
     S.lastAudio = now;
     if (!S.micOk) {
-      // Leftover buffered audio can arrive just after the mic stops; only count it as back if the mic really is live.
+      // Leftover buffered audio can arrive just after the mic stops; only count it as back if the mic really is live
+      // and the app is on screen.
+      if (document.visibilityState === "hidden") return;
       if (!(S.stream && S.stream.getAudioTracks().some(t => t.readyState === "live" && !t.muted))) return;
       micBack(now);
     }
@@ -434,12 +449,15 @@ function wav(pcm, rate) {
 /* ---------- wake lock + dim ---------- */
 async function requestWake() {
   try { if ("wakeLock" in navigator) S.wakeLock = await navigator.wakeLock.request("screen"); }
-  catch { setNote("Couldn't keep the screen awake. Set Settings → Display & Brightness → Auto-Lock to Never for tonight.", true); }
+  catch {
+    // Warn once per night; on later retries a failure would only hide the more useful mic message.
+    if (!S.wakeWarned) { S.wakeWarned = true; setNote("Couldn't keep the screen awake. Set Settings → Display & Brightness → Auto-Lock to Never for tonight.", true); }
+  }
 }
 function releaseWake() { try { S.wakeLock && S.wakeLock.release(); } catch {} S.wakeLock = null; }
 document.addEventListener("visibilitychange", () => {
   if (!S.running) return;
-  if (document.visibilityState === "hidden") micLost();   // iOS cuts the mic when the page leaves the screen
+  if (document.visibilityState === "hidden") { S.mutedSince = 0; micLost(); }   // iOS pauses the mic when the page leaves the screen
   else { requestWake(); restartMic(); }
 });
 // Any tap counts as the user gesture iOS may want before audio can restart.
