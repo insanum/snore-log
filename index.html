@@ -275,8 +275,16 @@ const MIN_GAP_MS = 5000;
 function watchTracks(stream) {
   stream.getAudioTracks().forEach(t => {
     t.onended = () => { log(`track ended${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream === S.stream) micLost(); };
-    t.onmute = () => { log(`track muted${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream === S.stream) micLost(); };
-    t.onunmute = () => { log(`track unmuted${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream === S.stream && S.ctx) S.ctx.resume().catch(() => {}); };
+    t.onmute = () => { log(`track muted${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream !== S.stream) return; if (S.ctx && S.ctx.state === "interrupted") systemInterrupted(); else micLost(); };
+    t.onunmute = () => {
+      log(`track unmuted${stream === S.stream ? "" : " (old)"} · ${where()}`);
+      if (stream !== S.stream) return;
+      if (S.interrupted) {                            // iOS has handed the mic back: the alarm/call/Siri is over
+        log("interruption ended; resuming");
+        S.interrupted = 0; S.nextTry = Date.now() + 1500;
+      }
+      if (S.ctx) S.ctx.resume().catch(() => {});
+    };
   });
 }
 
@@ -294,6 +302,8 @@ function wire(ctx, stream) {
   ctx.onstatechange = () => {
     log(`audio state → ${ctx.state}${ctx === S.ctx ? "" : " (old)"}`);
     if (ctx !== S.ctx || !S.running || ctx.state === "running") return;
+    if (ctx.state === "interrupted") { systemInterrupted(); return; }
+    if (S.interrupted) return;                        // e.g. "suspended" right after an interruption: don't fight it
     micLost(); ctx.resume().catch(() => {});
   };
   watchTracks(stream);
@@ -324,7 +334,7 @@ async function start() {
   wire(ctx, stream);
   Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
     loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, nextTry: 0,
-    rebuilds: 0, gaveUpLogged: false, levels: [], floorCalcAt: 0, sum: [], sumStart: Date.now(), clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
+    rebuilds: 0, gaveUpLogged: false, interrupted: 0, levels: [], floorCalcAt: 0, sum: [], sumStart: Date.now(), clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
   requestWake();
   log(`START · ${where()}`);
   setNote("Measuring room noise for a few seconds… stay quiet.");
@@ -368,6 +378,22 @@ function saveGap(start, end) {
   putClip({ id: "g" + start, type: "gap", start, end, duration: (end - start) / 1000, size: 0 }).then(refreshList).catch(() => {});
 }
 
+/* iOS interrupted our audio for something more important: an alarm, a phone call, Siri.
+   Grabbing the mic back right away can silence that alarm, so wait until iOS hands the mic back
+   (the track un-mutes), the user taps Resume, or 30 minutes have passed. */
+const INTERRUPT_WAIT_MS = 30 * 60 * 1000;
+function systemInterrupted() {
+  if (!S.running) return;
+  const first = !S.interrupted;
+  S.interrupted = Date.now();
+  micLost();
+  if (!S.gapStart) S.gapStart = Date.now();
+  if (first) log(`system interruption (alarm, call or Siri): not restarting until it ends · ${where()}`);
+  clearTimeout(S.noteTimer);
+  setNote("Paused for an alarm, call or Siri at " + fmtClock(S.interrupted) + ". It resumes when that ends, or tap Resume listening.", true);
+  render();
+}
+
 /* Release the mic and audio completely (stop the recording session). */
 function releaseAudio() {
   const st = S.stream;
@@ -386,12 +412,19 @@ async function restartMic(fromTap) {
   if (document.visibilityState !== "visible") return;
   const now = Date.now();
   if (!fromTap) {
+    if (S.ctx && S.ctx.state === "interrupted" && !S.interrupted) systemInterrupted();
+    if (S.interrupted) {
+      if (now - S.interrupted < INTERRUPT_WAIT_MS) return;
+      log("interruption still not over after 30 min; trying to resume");
+      S.interrupted = 0;
+    }
     if (S.nextTry && now < S.nextTry) return;
     if (S.rebuilds >= 4) {
       if (!S.gaveUpLogged) { S.gaveUpLogged = true; log("auto restart gave up after 4 tries; waiting for Resume tap"); }
       return;
     }
   }
+  if (fromTap) S.interrupted = 0;
   S.restarting = true;
   let ctx = fromTap ? newContext() : null;            // made during the tap, so iOS lets it run
   if (ctx) ctx.resume().catch(() => {});
@@ -568,6 +601,7 @@ document.addEventListener("visibilitychange", () => {
     log("released mic while away");
   } else {
     requestWake();
+    S.interrupted = 0;
     S.rebuilds = 0; S.gaveUpLogged = false;
     S.nextTry = Date.now() + 500;
     setTimeout(() => restartMic(false), 600);
@@ -627,7 +661,7 @@ function render() {
   const pill = $("pill"), st = $("statusText");
   const off = S.running && !S.micOk && !!S.gapStart;
   pill.className = "pill" + (!S.running ? "" : off ? " off" : S.rec ? " recording" : " listening");
-  st.textContent = !S.running ? "Not listening" : off ? "Mic off" : S.rec ? "Recording" : S.floor === null ? "Calibrating" : "Listening";
+  st.textContent = !S.running ? "Not listening" : off ? (S.interrupted ? "Paused" : "Mic off") : S.rec ? "Recording" : S.floor === null ? "Calibrating" : "Listening";
   $("resumeBtn").hidden = !off;
   $("startBtn").textContent = S.running ? "Stop" : "Start listening";
   $("startBtn").classList.toggle("stop", S.running);
