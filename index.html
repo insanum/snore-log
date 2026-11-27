@@ -314,7 +314,7 @@ async function start() {
   await resumed;
   wire(ctx, stream);
   Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
-    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, mutedSince: 0, backSince: 0,
+    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, nextTry: 0,
     rebuilds: 0, gaveUpLogged: false, clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
   requestWake();
   log(`START · ${where()}`);
@@ -328,7 +328,8 @@ function micLost() {
   log(`MIC LOST · ${where()}`);
   S.micOk = false;
   S.gapStart = S.lastAudio || Date.now();
-  S.backSince = 0; S.rebuilds = 0;
+  S.rebuilds = 0; S.gaveUpLogged = false;
+  S.nextTry = Date.now() + 3000;                     // e.g. a call or Siri: give iOS a moment to hand the mic back
   if (S.rec) finishClip(false);
   S.pre = []; S.preSamples = 0; S.loudMs = 0;
   clearTimeout(S.noteTimer);
@@ -340,7 +341,7 @@ function micLost() {
 function micBack(now) {
   log(`MIC BACK · ${where()}`);
   S.gaveUpLogged = false;
-  S.micOk = true; S.zeroMs = 0; S.mutedSince = 0; S.backSince = 0; S.rebuilds = 0;
+  S.micOk = true; S.zeroMs = 0; S.rebuilds = 0; S.nextTry = 0;
   if (S.gapStart) {
     const start = S.gapStart; S.gapStart = null;
     saveGap(start, now);
@@ -358,51 +359,53 @@ function saveGap(start, end) {
   putClip({ id: "g" + start, type: "gap", start, end, duration: (end - start) / 1000, size: 0 }).then(refreshList).catch(() => {});
 }
 
-/* Bring the mic back after the app returns to the screen.
-   iOS pauses (mutes) the mic in the background and usually un-pauses it on return, but the audio chain can stay
-   silent afterwards, so if no sound arrives we rebuild the chain. Asking for a new mic can make iOS show the
-   permission prompt, so that only happens when the mic has ended, stays paused, rebuilding didn't help,
-   or the user tapped Resume listening. */
+/* Release the mic and audio completely (stop the recording session). */
+function releaseAudio() {
+  const st = S.stream;
+  unwire();
+  if (st) st.getTracks().forEach(t => t.stop());
+  S.stream = null;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* Bring the mic back with a completely fresh start, the same way Start listening does.
+   On iPhone, rebuilding with the old mic, or asking for a new mic while the old one is still open, can leave the
+   recording session stuck delivering pure silence. Stopping everything first and then asking for the mic again
+   reliably gets sound back. Up to 4 automatic tries per return, about 4 s apart; the Resume button always tries. */
 async function restartMic(fromTap) {
   if (!S.running || S.micOk || !S.gapStart || S.restarting) return;
   if (document.visibilityState !== "visible") return;
-  S.restarting = true;
-  try {
-    const now = Date.now();
-    if (!S.backSince) S.backSince = now;
-    const tracks = S.stream ? S.stream.getAudioTracks() : [];
-    const ended = !tracks.some(t => t.readyState === "live");
-    const muted = !ended && tracks.every(t => t.muted);
-    if (muted && !S.mutedSince) S.mutedSince = now;
-    const stuck = muted && now - S.mutedSince > 10000;
-    const silent = !ended && !muted && now - Math.max(S.lastAudio, S.backSince) > 2500;
-    if (!(fromTap || ended || stuck || silent)) { S.ctx && S.ctx.resume().catch(() => {}); return; }
-    if (!fromTap && S.rebuilds >= 4) {               // stop retrying on our own; the Resume button stays available
+  const now = Date.now();
+  if (!fromTap) {
+    if (S.nextTry && now < S.nextTry) return;
+    if (S.rebuilds >= 4) {
       if (!S.gaveUpLogged) { S.gaveUpLogged = true; log("auto restart gave up after 4 tries; waiting for Resume tap"); }
       return;
     }
-
-    const ctx = newContext();                          // made before any await so a tap counts as the user gesture
-    const resumed = ctx.resume().catch(() => {});
-    let stream = S.stream;
-    const needNewMic = ended || muted || S.rebuilds >= 2 || (fromTap && S.rebuilds >= 1);
-    log(`restart #${S.rebuilds + 1} ${fromTap ? "(tap)" : "(auto)"} ended=${ended} muted=${muted} stuck=${stuck} silent=${silent} newMic=${needNewMic} · ${where()}`);
-    if (needNewMic) {
-      const old = stream;
-      stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
-      log(`new mic granted · track=${stream.getAudioTracks()[0] ? stream.getAudioTracks()[0].readyState + (stream.getAudioTracks()[0].muted ? "/muted" : "") : "none"}`);
-      if (old && old !== stream) old.getTracks().forEach(t => t.stop());
-    }
-    unwire();
-    await resumed;
+  }
+  S.restarting = true;
+  let ctx = fromTap ? newContext() : null;            // made during the tap, so iOS lets it run
+  if (ctx) ctx.resume().catch(() => {});
+  try {
+    log(`restart #${S.rebuilds + 1} ${fromTap ? "(tap)" : "(auto)"}: releasing mic · ${where()}`);
+    releaseAudio();
+    await sleep(fromTap ? 200 : 400);                  // let iOS close the old recording session
+    const stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+    const t = stream.getAudioTracks()[0];
+    log(`new mic granted · track=${t ? t.readyState + (t.muted ? "/muted" : "") : "none"}`);
+    if (!S.running) { stream.getTracks().forEach(x => x.stop()); if (ctx) ctx.close().catch(() => {}); return; }
+    if (!ctx) ctx = newContext();
+    await ctx.resume().catch(() => {});
     wire(ctx, stream);
-    S.rebuilds++; S.backSince = Date.now(); S.mutedSince = 0;
-    log(`restart done · ${where()}`);
     requestWake();
+    log(`restart done · ${where()}`);
   } catch (e) {
     log(`restart FAILED: ${(e && e.name) || "error"} ${(e && e.message) || ""} · ${where()}`);
+    if (ctx && ctx !== S.ctx) ctx.close().catch(() => {});
     setNote("Couldn't restart the microphone (" + ((e && e.name) || "error") + "). Tap Resume listening to try again.", true);
   } finally {
+    S.rebuilds++;
+    S.nextTry = Date.now() + 4000;
     S.restarting = false;
     render();
   }
@@ -526,8 +529,17 @@ function releaseWake() { try { S.wakeLock && S.wakeLock.release(); } catch {} S.
 document.addEventListener("visibilitychange", () => {
   if (!S.running) return;
   log(`screen ${document.visibilityState} · ${where()}`);
-  if (document.visibilityState === "hidden") { S.mutedSince = 0; S.backSince = 0; micLost(); }   // iOS pauses the mic when the page leaves the screen
-  else { requestWake(); restartMic(false); }
+  if (document.visibilityState === "hidden") {
+    micLost();
+    if (!S.gapStart) S.gapStart = Date.now();         // e.g. hidden before the first sound data arrived
+    releaseAudio();                                   // iOS takes the mic in the background anyway; let go cleanly
+    log("released mic while away");
+  } else {
+    requestWake();
+    S.rebuilds = 0; S.gaveUpLogged = false;
+    S.nextTry = Date.now() + 500;
+    setTimeout(() => restartMic(false), 600);
+  }
 });
 // Any tap counts as the user gesture iOS may want before audio can restart.
 $("resumeBtn").onclick = () => { log("Resume tapped"); restartMic(true); };
