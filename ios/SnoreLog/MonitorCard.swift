@@ -21,6 +21,19 @@ struct MonitorCard: View {
                 .frame(height: 84)
                 .accessibilityLabel("Sound level over the last minute")
 
+            if recorder.isRunning, !recorder.isPaused {
+                HStack {
+                    Text("Level \(Format.db(recorder.level)) · trigger \(Format.db(recorder.trigger))")
+                    Spacer()
+                    if recorder.state == .recording, let quiet = recorder.quietFor {
+                        Text("Quiet \(Format.duration(quiet)) of \(Format.duration(recorder.silenceTarget))")
+                            .foregroundStyle(Theme.moon)
+                    }
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+
             HStack {
                 Stat(value: "\(recorder.clipsThisSession)", label: "Clips")
                 Stat(value: Format.duration(recorder.recordedSeconds), label: "Recorded")

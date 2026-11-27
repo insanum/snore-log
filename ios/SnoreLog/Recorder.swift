@@ -20,6 +20,9 @@ final class Recorder: ObservableObject {
     @Published private(set) var level: Double = -100
     @Published private(set) var floor: Double?
     @Published private(set) var trigger: Double?
+    /// While recording: seconds since the last loud sound, and the silence time that ends the clip.
+    @Published private(set) var quietFor: Double?
+    @Published private(set) var silenceTarget: Double = Double(Recorder.defaultSilence)
     /// Last 60 seconds of levels, about 10 per second, for the live graph.
     @Published private(set) var history: [Double] = []
     @Published private(set) var sessionStart: Date?
@@ -71,6 +74,8 @@ final class Recorder: ObservableObject {
             silence: Double(defaults.object(forKey: Self.silenceKey) as? Int ?? Self.defaultSilence),
             recordingsDir: store.recordingsDir,
             recorder: self)
+        silenceTarget = Double(defaults.object(forKey: Self.silenceKey) as? Int ?? Self.defaultSilence)
+        quietFor = nil
         sessionStart = Date()
         clipsThisSession = 0
         recordedSeconds = 0
@@ -189,6 +194,7 @@ final class Recorder: ObservableObject {
         level = update.level
         floor = update.floor
         trigger = update.trigger
+        quietFor = update.quietFor
         history.append(update.level)
         if history.count > 600 { history.removeFirst(history.count - 600) }
         switch update.phase {
@@ -248,6 +254,7 @@ final class Recorder: ObservableObject {
         let defaults = UserDefaults.standard
         let sensitivity = defaults.object(forKey: Self.sensitivityKey) as? Double ?? Self.defaultSensitivity
         let silence = Double(defaults.object(forKey: Self.silenceKey) as? Int ?? Self.defaultSilence)
+        silenceTarget = silence
         audioQueue.async {
             det.sensitivity = sensitivity
             det.silenceSeconds = silence

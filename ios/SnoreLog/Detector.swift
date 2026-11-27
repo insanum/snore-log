@@ -5,7 +5,10 @@ import Foundation
 ///   (updated all the time, also while recording, so a fan turning on can't keep a recording going forever);
 /// - start a clip when a sound is `sensitivity` dB louder than the room for at least a quarter of a second,
 ///   including the 3 seconds before it;
-/// - end the clip after `silenceSeconds` without loud sounds, trimming the quiet tail;
+/// - end the clip after `silenceSeconds` without loud sounds, trimming the quiet tail
+///   (a sound has to stay loud for ~0.2 s to restart that countdown, so single blips don't);
+/// - remove rumble below ~80 Hz first: the iPhone app gets the raw mic, and deep rumble
+///   (air handling, traffic, the building) would otherwise keep resetting the countdown;
 /// - split clips at 20 minutes.
 ///
 /// Not thread-safe: use it from one serial queue only (the recorder's audio queue).
@@ -18,6 +21,8 @@ final class Detector: @unchecked Sendable {
         var floor: Double?
         var trigger: Double?
         var phase: Phase
+        /// While recording: seconds since the last loud sound (the stop countdown).
+        var quietFor: Double?
     }
 
     struct FinishedClip {
@@ -44,6 +49,13 @@ final class Detector: @unchecked Sendable {
     private let triggerSeconds = 0.25
     private let floorWindow: TimeInterval = 60
     private let targetRate = 16000.0
+    private let highPassHz = 80.0
+    private let loudToResetSeconds = 0.2
+
+    // High-pass filter (2nd-order Butterworth), state kept across buffers.
+    private var hb0: Float = 1, hb1: Float = 0, hb2: Float = 0, ha1: Float = 0, ha2: Float = 0
+    private var hx1: Float = 0, hx2: Float = 0, hy1: Float = 0, hy2: Float = 0
+    private var loudStreak = 0.0
 
     // Downsampling to ~16 kHz mono (plenty for snoring, and small files).
     private var inRate = 0.0
@@ -90,11 +102,12 @@ final class Detector: @unchecked Sendable {
         guard !input.isEmpty, sampleRate > 0 else { return }
         if sampleRate != inRate { resetDownsampler(sampleRate) }
 
+        let filtered = highPass(input)
         var sq: Double = 0
-        for v in input { sq += Double(v) * Double(v) }
-        let db = 20 * log10(sqrt(sq / Double(input.count)) + 1e-9)
+        for v in filtered { sq += Double(v) * Double(v) }
+        let db = 20 * log10(sqrt(sq / Double(filtered.count)) + 1e-9)
         let seconds = Double(input.count) / sampleRate
-        let chunk = downsample(input)
+        let chunk = downsample(filtered)
 
         trackRoom(now: now, db: db)
 
@@ -111,18 +124,23 @@ final class Detector: @unchecked Sendable {
         }
 
         let trigger = (floor ?? db) + sensitivity
-        if var r = rec {
-            r.chunks.append(chunk)
-            r.count += chunk.count
+        if rec != nil {
+            // Mutate in place (no copy of the growing clip on every buffer).
+            rec!.chunks.append(chunk)
+            rec!.count += chunk.count
             if db > trigger - 3 {
-                r.lastLoud = now
-                r.lastLoudCount = r.count
-                r.peak = max(r.peak, db)
+                loudStreak += seconds
+                rec!.peak = max(rec!.peak, db)
+                if loudStreak >= loudToResetSeconds {
+                    rec!.lastLoud = now
+                    rec!.lastLoudCount = rec!.count
+                }
+            } else {
+                loudStreak = 0
             }
-            rec = r
-            if now.timeIntervalSince(r.lastLoud) > silenceSeconds {
+            if now.timeIntervalSince(rec!.lastLoud) > silenceSeconds {
                 finish(trim: true)
-            } else if Double(r.count) / outRate >= maxClipSeconds {
+            } else if Double(rec!.count) / outRate >= maxClipSeconds {
                 finish(trim: false)
             }
         } else {
@@ -152,9 +170,27 @@ final class Detector: @unchecked Sendable {
         outRate = min(targetRate, rate)
         ratio = rate / outRate
         dsPos = 0; dsSum = 0; dsCount = 0
+        // High-pass coefficients (RBJ cookbook, Q = 0.7071).
+        let w0 = 2 * Double.pi * highPassHz / rate
+        let alpha = sin(w0) / (2 * 0.7071067811865476)
+        let c = cos(w0), a0 = 1 + alpha
+        hb0 = Float((1 + c) / 2 / a0); hb1 = Float(-(1 + c) / a0); hb2 = hb0
+        ha1 = Float(-2 * c / a0); ha2 = Float((1 - alpha) / a0)
+        hx1 = 0; hx2 = 0; hy1 = 0; hy2 = 0
         // A clip can't mix sample rates; save what we have.
         if rec != nil { finish(trim: false) }
         preroll = []; prerollCount = 0
+    }
+
+    private func highPass(_ x: [Float]) -> [Float] {
+        var out = [Float](repeating: 0, count: x.count)
+        for i in x.indices {
+            let v = x[i]
+            let y = hb0 * v + hb1 * hx1 + hb2 * hx2 - ha1 * hy1 - ha2 * hy2
+            hx2 = hx1; hx1 = v; hy2 = hy1; hy1 = y
+            out[i] = y
+        }
+        return out
     }
 
     private func downsample(_ x: [Float]) -> [Float] {
@@ -204,6 +240,7 @@ final class Detector: @unchecked Sendable {
         let start = now.addingTimeInterval(-Double(prerollCount) / outRate)
         rec = Recording(start: start, chunks: preroll, count: prerollCount,
                         lastLoud: now, lastLoudCount: prerollCount, peak: db)
+        loudStreak = 0
         preroll = []
         prerollCount = 0
         loudTime = 0
@@ -236,6 +273,7 @@ final class Detector: @unchecked Sendable {
         guard now.timeIntervalSince(lastUpdate) >= 0.1 else { return }
         lastUpdate = now
         let phase: Phase = floor == nil ? .calibrating : (rec != nil ? .recording : .listening)
-        onUpdate?(Update(level: db, floor: floor, trigger: floor.map { $0 + sensitivity }, phase: phase))
+        onUpdate?(Update(level: db, floor: floor, trigger: floor.map { $0 + sensitivity }, phase: phase,
+                         quietFor: rec.map { now.timeIntervalSince($0.lastLoud) }))
     }
 }
