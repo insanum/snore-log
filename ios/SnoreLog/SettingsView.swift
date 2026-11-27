@@ -54,7 +54,8 @@ struct SettingsView: View {
 
             Section {
                 Link("Source code on GitHub", destination: URL(string: "https://github.com/insanum/snore-log")!)
-                Link("Web version", destination: URL(string: "https://insanum.github.io/snore-log/")!)
+                Link("Web version", destination: URL(string: "https://insanum.github.io/snore-log/app/")!)
+                Link("Snore Log website", destination: URL(string: "https://insanum.github.io/snore-log/")!)
                 Link("Privacy", destination: URL(string: "https://insanum.github.io/snore-log/privacy.html")!)
                 LabeledContent("Version", value: appVersion)
             } header: {

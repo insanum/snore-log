@@ -1,0 +1,901 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Snore Log">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e1322">
+<!-- Filled in by the GitHub Pages workflow at publish time -->
+<meta name="build-sha" content="__BUILD_SHA__">
+<meta name="build-full-sha" content="__BUILD_FULL_SHA__">
+<meta name="build-time" content="__BUILD_TIME__">
+<link rel="apple-touch-icon" id="touchIcon" href="">
+<title>Snore Log</title>
+<style>
+/* Layout: one narrow night-time column — monitor on top, settings, then recordings grouped by night. */
+:root{
+  --ink:#0e1322;        /* page ground */
+  --panel:#161d31;      /* raised surfaces */
+  --line:#263050;       /* hairlines */
+  --text:#e4e6f2;
+  --muted:#8e95b3;
+  --moon:#f2c46d;       /* accent: listening / primary action */
+  --rec:#ff7a6b;        /* recording state */
+  --ok:#7fd1b9;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--ink);color:var(--text);font:15px/1.45 var(--font);
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:calc(env(safe-area-inset-bottom,0px) + 24px);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  -webkit-tap-highlight-color:transparent;
+}
+[hidden]{display:none!important}
+main{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding-top:14px}
+h1{font-size:24px;letter-spacing:-.01em;margin:0;font-weight:700}
+h1 span{color:var(--moon)}
+.storage{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:0;font-weight:600}
+
+.monitor{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:14px}
+.statusRow{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.pill{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:14px;padding:5px 11px;border-radius:999px;background:#1f2742;color:var(--muted)}
+.pill i{width:8px;height:8px;border-radius:50%;background:currentColor}
+.pill.listening{color:var(--moon)}
+.pill.recording{color:var(--rec);background:#3a1f26}
+.pill.off{color:var(--text);background:#4a2330}
+.clip.gap{grid-template-columns:44px 1fr auto;background:repeating-linear-gradient(135deg,transparent 0 8px,#1b2238 8px 16px)}
+.gapMark{width:44px;height:44px;display:grid;place-items:center}
+.gapMark svg{width:20px;height:20px;fill:none;stroke:var(--rec);stroke-width:2;stroke-linecap:round}
+.clip.gap .t{color:var(--rec)}
+.pill.recording i{animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.25}}
+.clock{font:600 13px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+canvas#trace{width:100%;height:84px;display:block;border-radius:10px;background:#10172a}
+.meterLabels{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--muted);margin-top:-8px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat b{font:600 18px var(--mono);font-variant-numeric:tabular-nums}
+.stat span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.actions{display:flex;gap:10px}
+button{font:inherit;color:inherit;border:0;cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--moon);outline-offset:2px}
+.primary{flex:1;background:var(--moon);color:#1d1606;font-weight:700;font-size:17px;padding:15px;border-radius:14px}
+.primary.stop{background:#2a3352;color:var(--text)}
+.ghost{background:#1f2742;padding:15px 16px;border-radius:14px;font-weight:600}
+.note{font-size:13px;color:var(--muted);margin:0}
+.diag{font:11px var(--mono);color:var(--muted);margin:0;opacity:.8}
+.note.warn{color:var(--rec)}
+
+.settings{display:flex;flex-direction:column;gap:14px;padding:4px 2px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{display:flex;justify-content:space-between;font-size:14px}
+.field label output{font:13px var(--mono);color:var(--moon)}
+input[type=range]{width:100%;accent-color:var(--moon)}
+select{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit}
+.hint{font-size:12px;color:var(--muted)}
+
+.night{display:flex;flex-direction:column;gap:6px}
+.nightHead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:0 2px}
+.nightHead h3{margin:0;font-size:16px}
+.nightHead{flex-wrap:wrap}
+.nightRight{display:flex;align-items:baseline;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.nightHead span{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.clips{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.clip{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;padding:10px 12px;border-top:1px solid var(--line)}
+.clip:first-child{border-top:0}
+.play{width:44px;height:44px;border-radius:50%;background:#232c4a;display:grid;place-items:center}
+.play svg{width:18px;height:18px;fill:var(--moon)}
+.clip.playing .play{background:var(--moon)}
+.clip.playing .play svg{fill:#1d1606}
+.info{min-width:0;display:flex;flex-direction:column;gap:4px}
+.info .t{font-weight:600;font-variant-numeric:tabular-nums}
+.info .m{font:12px var(--mono);color:var(--muted)}
+.bar{height:3px;background:#232c4a;border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--moon)}
+.rowBtns{display:flex;gap:6px}
+.small{background:transparent;color:var(--muted);font-size:13px;padding:8px 6px;border-radius:8px}
+.small.confirm{color:var(--rec);font-weight:600}
+.empty{background:var(--panel);border:1px dashed var(--line);border-radius:14px;padding:20px;color:var(--muted);font-size:14px}
+
+details.tips{background:transparent;border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+details.tips summary{cursor:pointer;font-weight:600}
+details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size:14px;display:flex;flex-direction:column;gap:6px}
+
+.version{display:flex;flex-wrap:wrap;gap:6px 18px;font:12px var(--mono);color:var(--muted);padding:4px 2px;font-variant-numeric:tabular-nums}
+.version span{text-transform:uppercase;letter-spacing:.07em;font-family:var(--font);font-size:11px;margin-right:4px}
+.version b{font-weight:500;color:var(--text)}
+.version a{color:var(--moon);text-decoration:none}
+.update{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:10px 12px;border-radius:12px;background:#2a2516;border:1px solid #5a4a22;font-size:14px}
+.update button{background:var(--moon);color:#1d1606;font-weight:700;padding:8px 12px;border-radius:10px;white-space:nowrap}
+.logView{font:11px/1.45 var(--mono);color:var(--muted);white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;margin:10px 0 0;user-select:text;-webkit-user-select:text}
+#diagPanel .actions{margin-top:8px}
+#dim{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#3b4160}
+#dim .big{font:300 56px var(--mono);font-variant-numeric:tabular-nums}
+#dim .sub{font-size:14px}
+#dim .sub.rec{color:#6b2f2a}
+@media (prefers-reduced-motion:reduce){.pill.recording i{animation:none}}
+</style>
+</head>
+<body>
+<main>
+  <div class="update" id="updateBar" hidden>
+    <span id="updateText">A new version is available.</span>
+    <button id="updateBtn">Update now</button>
+  </div>
+
+  <header>
+    <h1>Snore <span>Log</span></h1>
+    <div class="storage" id="storage">—</div>
+  </header>
+
+  <section class="monitor" aria-label="Monitor">
+    <div class="statusRow">
+      <div class="pill" id="pill"><i></i><span id="statusText">Not listening</span></div>
+      <div class="clock" id="clock">00:00:00</div>
+    </div>
+    <canvas id="trace" aria-label="Sound level over the last minute"></canvas>
+    <div class="meterLabels"><span>last 60 s</span><span id="levelText">— dB</span></div>
+    <div class="stats">
+      <div class="stat"><b id="sClips">0</b><span>Clips tonight</span></div>
+      <div class="stat"><b id="sRecTime">0:00</b><span>Recorded</span></div>
+      <div class="stat"><b id="sFloor">—</b><span>Room noise</span></div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="resumeBtn" hidden>Resume listening</button>
+      <button class="primary" id="startBtn">Start listening</button>
+      <button class="ghost" id="dimBtn" hidden>Dim</button>
+    </div>
+    <p class="diag" id="diag" hidden></p>
+    <p class="note" id="note">Tap Start before you go to sleep. Leave this screen open and the phone plugged in.</p>
+  </section>
+
+  <section class="settings" aria-label="Settings">
+    <h2>Settings</h2>
+    <div class="field">
+      <label for="sens">Sensitivity <output id="sensOut"></output></label>
+      <input type="range" id="sens" min="4" max="30" step="1">
+      <div class="hint">How much louder than the room a sound must be to start recording. Lower = more sensitive.</div>
+    </div>
+    <div class="field">
+      <label for="silence">Stop after silence of</label>
+      <select id="silence">
+        <option value="60">1 minute</option>
+        <option value="120">2 minutes</option>
+        <option value="180">3 minutes</option>
+        <option value="300">5 minutes</option>
+      </select>
+    </div>
+  </section>
+
+  <section class="night" aria-label="Recordings" id="list">
+    <h2>Recordings</h2>
+  </section>
+
+  <details class="tips">
+    <summary>Tips for a good night's recording</summary>
+    <ul>
+      <li>Add this page to your Home Screen (Share → Add to Home Screen) so recordings are kept safely.</li>
+      <li>Keep the phone on charge, about an arm's length from your head, microphone facing you.</li>
+      <li>Leave Snore Log open. iPhone stops the microphone if you lock the screen or switch apps. The app keeps the screen awake; tap Dim to black it out.</li>
+      <li>Turn on Do Not Disturb so notifications don't wake you or show up in recordings.</li>
+      <li>If a fan or air purifier triggers clips all night, raise Sensitivity.</li>
+    </ul>
+  </details>
+
+  <footer class="version" id="version" aria-label="App version">
+    <div><span>Version</span> <a id="vSha" href="https://github.com/insanum/snore-log" target="_blank" rel="noopener">dev</a></div>
+    <div><span>Committed</span> <b id="vBuilt">—</b></div>
+    <div><span>Loaded</span> <b id="vLoaded">—</b></div>
+  </footer>
+
+  <details class="tips" id="diagPanel">
+    <summary>Diagnostics</summary>
+    <p class="hint">A log of what the microphone and audio did. If something goes wrong, tap Copy log and paste it to whoever is helping you.</p>
+    <div class="actions">
+      <button class="ghost" id="copyLog">Copy log</button>
+      <button class="ghost" id="clearLog">Clear</button>
+    </div>
+    <pre id="logView" class="logView"></pre>
+  </details>
+</main>
+
+<div id="dim" hidden>
+  <div class="big" id="dimClock">00:00</div>
+  <div class="sub" id="dimStatus">Listening</div>
+  <div class="sub">Tap to wake</div>
+</div>
+
+<script>
+(() => {
+"use strict";
+const OUT_RATE = 16000, PREROLL_S = 3, TAIL_S = 4, MAX_CLIP_S = 20 * 60, TRIGGER_MS = 250, CALIB_MS = 2500;
+const $ = id => document.getElementById(id);
+
+/* ---------- settings ---------- */
+const settings = { sens: 12, silence: 120 };
+try { Object.assign(settings, JSON.parse(localStorage.getItem("snore.settings") || "{}")); } catch {}
+const saveSettings = () => { try { localStorage.setItem("snore.settings", JSON.stringify(settings)); } catch {} };
+$("sens").value = settings.sens; $("sensOut").textContent = "+" + settings.sens + " dB";
+$("silence").value = String(settings.silence);
+$("sens").oninput = e => { settings.sens = +e.target.value; $("sensOut").textContent = "+" + settings.sens + " dB"; saveSettings(); };
+$("silence").onchange = e => { settings.silence = +e.target.value; saveSettings(); };
+
+/* ---------- storage (IndexedDB) ---------- */
+let dbp = null;
+function db() {
+  if (!dbp) dbp = new Promise((res, rej) => {
+    const r = indexedDB.open("snorelog", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("clips", { keyPath: "id" });
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  return dbp;
+}
+async function tx(mode, fn) {
+  const d = await db();
+  return new Promise((res, rej) => {
+    const t = d.transaction("clips", mode), s = t.objectStore("clips");
+    const req = fn(s); t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error);
+  });
+}
+const putClip = c => tx("readwrite", s => s.put(c));
+const delClip = id => tx("readwrite", s => s.delete(id));
+const allClips = () => tx("readonly", s => s.getAll());
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+
+/* ---------- audio engine ---------- */
+const S = { running: false, ctx: null, stream: null, src: null, node: null, sink: null,
+  floor: null, calib: [], calibMs: 0, loudMs: 0, rec: null, pre: [], preSamples: 0,
+  sessionStart: 0, clips: 0, recSeconds: 0, hist: [], lastDb: -100, wakeLock: null, ds: null };
+if (location.hostname === "localhost") window.__snore = S;   // test hook, local only
+
+function makeDownsampler(inRate) {
+  const ratio = inRate / OUT_RATE; let pos = 0, sum = 0, n = 0;
+  return input => {
+    const out = new Int16Array(Math.ceil(input.length / ratio) + 2); let k = 0;
+    for (let i = 0; i < input.length; i++) {
+      sum += input[i]; n++; pos += 1;
+      if (pos >= ratio) { const v = Math.max(-1, Math.min(1, sum / n)); out[k++] = v * 32767; pos -= ratio; sum = 0; n = 0; }
+    }
+    return out.subarray(0, k);
+  };
+}
+
+const MIC_OPTS = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
+const MIN_GAP_MS = 5000;
+
+function watchTracks(stream) {
+  stream.getAudioTracks().forEach(t => {
+    t.onended = () => { log(`track ended${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream === S.stream) micLost(); };
+    t.onmute = () => { log(`track muted${stream === S.stream ? "" : " (old)"} · ${where()}`); if (stream !== S.stream) return; if (S.ctx && S.ctx.state === "interrupted") systemInterrupted(); else micLost(); };
+    t.onunmute = () => {
+      log(`track unmuted${stream === S.stream ? "" : " (old)"} · ${where()}`);
+      if (stream !== S.stream) return;
+      if (S.interrupted) {                            // iOS has handed the mic back: the alarm/call/Siri is over
+        log("interruption ended; resuming");
+        S.interrupted = 0; S.nextTry = Date.now() + 1500;
+      }
+      if (S.ctx) S.ctx.resume().catch(() => {});
+    };
+  });
+}
+
+/* Build the audio chain: mic stream → processor that measures and keeps the sound. */
+function wire(ctx, stream) {
+  S.ctx = ctx; S.stream = stream;
+  S.ds = makeDownsampler(ctx.sampleRate);
+  S.src = ctx.createMediaStreamSource(stream);
+  S.node = ctx.createScriptProcessor(4096, 1, 1);
+  S.sink = ctx.createGain(); S.sink.gain.value = 0;
+  S.src.connect(S.node); S.node.connect(S.sink); S.sink.connect(ctx.destination);
+  S.node.onaudioprocess = onAudio;
+  S.firstBuf = true;
+  log(`audio chain built · rate=${ctx.sampleRate} · ${where()}`);
+  ctx.onstatechange = () => {
+    log(`audio state → ${ctx.state}${ctx === S.ctx ? "" : " (old)"}`);
+    if (ctx !== S.ctx || !S.running) return;
+    if (ctx.state === "running") {
+      // iOS switches our audio back on when the alarm/call/Siri is over, even if the old mic stays muted.
+      if (S.interrupted) {
+        log("audio back on: interruption over; restarting the mic");
+        S.interrupted = 0; S.nextTry = Date.now() + 1000;
+      }
+      return;
+    }
+    if (ctx.state === "interrupted") { systemInterrupted(); return; }
+    if (S.interrupted) return;                        // e.g. "suspended" right after an interruption: don't fight it
+    micLost(); ctx.resume().catch(() => {});
+  };
+  watchTracks(stream);
+}
+
+function unwire() {
+  try { S.node && (S.node.onaudioprocess = null); } catch {}
+  try { S.src && S.src.disconnect(); S.node && S.node.disconnect(); S.sink && S.sink.disconnect(); } catch {}
+  const c = S.ctx;
+  if (c) { c.onstatechange = null; c.close().catch(() => {}); }
+  S.ctx = S.src = S.node = S.sink = null;
+}
+
+const newContext = () => { const AC = window.AudioContext || window.webkitAudioContext; return new AC(); };
+
+async function start() {
+  const ctx = newContext();                 // created during the tap, so iOS lets it run
+  const resumed = ctx.resume().catch(() => {});
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+  } catch (e) {
+    ctx.close().catch(() => {});
+    setNote("Microphone access was refused. Allow the microphone for this page in Settings → Safari → Microphone, then try again.", true);
+    return;
+  }
+  await resumed;
+  wire(ctx, stream);
+  Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
+    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, nextTry: 0,
+    rebuilds: 0, gaveUpLogged: false, interrupted: 0, levels: [], floorCalcAt: 0, sum: [], sumStart: Date.now(), clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
+  requestWake();
+  log(`START · ${where()}`);
+  setNote("Measuring room noise for a few seconds… stay quiet.");
+  render();
+}
+
+/* The mic went away (screen locked, app left, call, Siri, alarm): keep what we have and note the gap. */
+function micLost() {
+  if (!S.running || !S.micOk) return;
+  log(`MIC LOST · ${where()}`);
+  S.micOk = false;
+  S.gapStart = S.lastAudio || Date.now();
+  S.rebuilds = 0; S.gaveUpLogged = false;
+  S.nextTry = Date.now() + 3000;                     // e.g. a call or Siri: give iOS a moment to hand the mic back
+  if (S.rec) finishClip(false);
+  S.pre = []; S.preSamples = 0; S.loudMs = 0;
+  clearTimeout(S.noteTimer);
+  setNote("Mic paused at " + fmtClock(S.gapStart) + ". It restarts when Snore Log is back on screen. If it doesn't, tap Resume listening.", true);
+  render();
+}
+
+/* Mic audio is flowing again: close the gap. */
+function micBack(now) {
+  log(`MIC BACK · ${where()}`);
+  S.gaveUpLogged = false;
+  S.micOk = true; S.zeroMs = 0; S.rebuilds = 0; S.nextTry = 0;
+  if (S.gapStart) {
+    const start = S.gapStart; S.gapStart = null;
+    saveGap(start, now);
+    const msg = "Back to listening. Nothing was recorded from " + fmtTime(start) + " to " + fmtTime(now) + "; that gap is marked in the list.";
+    setNote(msg);
+    clearTimeout(S.noteTimer);
+    S.noteTimer = setTimeout(() => { if (S.running && S.micOk && $("note").textContent === msg) setNote("Listening. Recording starts automatically when a sound is detected."); }, 20000);
+  }
+  render();
+}
+
+function saveGap(start, end) {
+  if (end - start < MIN_GAP_MS) return;
+  S.gapMs += end - start;
+  putClip({ id: "g" + start, type: "gap", start, end, duration: (end - start) / 1000, size: 0 }).then(refreshList).catch(() => {});
+}
+
+/* iOS interrupted our audio for something more important: an alarm, a phone call, Siri.
+   Grabbing the mic back right away can silence that alarm, so wait until iOS hands the mic back
+   (the track un-mutes), the user taps Resume, or 30 minutes have passed. */
+const INTERRUPT_WAIT_MS = 30 * 60 * 1000;
+function systemInterrupted() {
+  if (!S.running) return;
+  const first = !S.interrupted;
+  S.interrupted = Date.now();
+  micLost();
+  if (!S.gapStart) S.gapStart = Date.now();
+  if (first) log(`system interruption (alarm, call or Siri): not restarting until it ends · ${where()}`);
+  clearTimeout(S.noteTimer);
+  setNote("Paused for an alarm, call or Siri at " + fmtClock(S.interrupted) + ". It resumes when that ends, or tap Resume listening.", true);
+  render();
+}
+
+/* Release the mic and audio completely (stop the recording session). */
+function releaseAudio() {
+  const st = S.stream;
+  unwire();
+  if (st) st.getTracks().forEach(t => t.stop());
+  S.stream = null;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* Bring the mic back with a completely fresh start, the same way Start listening does.
+   On iPhone, rebuilding with the old mic, or asking for a new mic while the old one is still open, can leave the
+   recording session stuck delivering pure silence. Stopping everything first and then asking for the mic again
+   reliably gets sound back. Up to 4 automatic tries per return, about 4 s apart; the Resume button always tries. */
+async function restartMic(fromTap) {
+  if (!S.running || S.micOk || !S.gapStart || S.restarting) return;
+  if (document.visibilityState !== "visible") return;
+  const now = Date.now();
+  if (!fromTap) {
+    if (S.ctx && S.ctx.state === "interrupted" && !S.interrupted) systemInterrupted();
+    if (S.interrupted) {
+      if (now - S.interrupted < INTERRUPT_WAIT_MS) return;
+      log("interruption still not over after 30 min; trying to resume");
+      S.interrupted = 0;
+    }
+    if (S.nextTry && now < S.nextTry) return;
+    if (S.rebuilds >= 4) {
+      if (!S.gaveUpLogged) { S.gaveUpLogged = true; log("auto restart gave up after 4 tries; waiting for Resume tap"); }
+      return;
+    }
+  }
+  if (fromTap) S.interrupted = 0;
+  S.restarting = true;
+  let ctx = fromTap ? newContext() : null;            // made during the tap, so iOS lets it run
+  if (ctx) ctx.resume().catch(() => {});
+  try {
+    log(`restart #${S.rebuilds + 1} ${fromTap ? "(tap)" : "(auto)"}: releasing mic · ${where()}`);
+    releaseAudio();
+    await sleep(fromTap ? 200 : 400);                  // let iOS close the old recording session
+    const stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+    const t = stream.getAudioTracks()[0];
+    log(`new mic granted · track=${t ? t.readyState + (t.muted ? "/muted" : "") : "none"}`);
+    if (!S.running) { stream.getTracks().forEach(x => x.stop()); if (ctx) ctx.close().catch(() => {}); return; }
+    if (!ctx) ctx = newContext();
+    await ctx.resume().catch(() => {});
+    wire(ctx, stream);
+    requestWake();
+    log(`restart done · ${where()}`);
+  } catch (e) {
+    log(`restart FAILED: ${(e && e.name) || "error"} ${(e && e.message) || ""} · ${where()}`);
+    if (ctx && ctx !== S.ctx) ctx.close().catch(() => {});
+    setNote("Couldn't restart the microphone (" + ((e && e.name) || "error") + "). Tap Resume listening to try again.", true);
+  } finally {
+    S.rebuilds++;
+    S.nextTry = Date.now() + 4000;
+    S.restarting = false;
+    render();
+  }
+}
+
+/* If no audio arrives for a few seconds while the page is open, treat the mic as lost and try to bring it back. */
+setInterval(() => {
+  if (!S.running) return;
+  if (S.micOk && Date.now() - S.lastAudio > 4000) micLost();
+  if (!S.micOk) restartMic(false);
+}, 2000);
+
+async function stop() {
+  log(`STOP · ${where()}`);
+  if (S.running && !S.micOk && S.gapStart) { saveGap(S.gapStart, Date.now()); S.gapStart = null; }
+  S.running = false;
+  if (S.rec) finishClip(false);
+  const stream = S.stream;
+  unwire();
+  stream && stream.getTracks().forEach(t => t.stop());
+  S.stream = null;
+  releaseWake(); hideDim();
+  setNote("Stopped. Your recordings are below.");
+  render();
+}
+
+function onAudio(e) {
+  if (!S.running) return;
+  const input = e.inputBuffer.getChannelData(0);
+  let sq = 0; for (let i = 0; i < input.length; i++) sq += input[i] * input[i];
+  const db = 20 * Math.log10(Math.sqrt(sq / input.length) + 1e-9);
+  const ms = input.length / e.inputBuffer.sampleRate * 1000, now = Date.now();
+  if (S.firstBuf) { S.firstBuf = false; log(`first audio data after build: ${sq === 0 ? "pure silence" : "sound " + Math.round(db) + " dB"}`); }
+  if (sq === 0 && S.zeroMs === 0) log(`audio data went silent (zeros) · ${where()}`);
+  // A real microphone never delivers perfect digital silence; iOS does when it has taken the mic away.
+  if (sq === 0) {
+    S.zeroMs += ms;
+    if (S.zeroMs > 3000) micLost();
+    if (!S.micOk) return;
+  } else {
+    S.zeroMs = 0;
+    S.lastAudio = now;
+    if (!S.micOk) {
+      // Leftover buffered audio can arrive just after the mic stops; only count it as back if the mic really is live
+      // and the app is on screen.
+      if (document.visibilityState === "hidden") return;
+      if (!(S.stream && S.stream.getAudioTracks().some(t => t.readyState === "live" && !t.muted))) return;
+      micBack(now);
+    }
+  }
+  const chunk = S.ds(input);
+  S.lastDb = db; S.hist.push(db); if (S.hist.length > 720) S.hist.shift();
+  trackLevels(now, db);
+
+  if (S.floor === null) {                          // calibration
+    S.calib.push(db); S.calibMs += ms; pushPre(chunk);
+    if (S.calibMs >= CALIB_MS) { const s = [...S.calib].sort((a, b) => a - b); S.floor = s[Math.floor(s.length / 2)]; setNote("Listening. Recording starts automatically when a sound is detected."); }
+    return;
+  }
+  const thr = S.floor + settings.sens;
+
+  if (!S.rec) {
+    pushPre(chunk);
+    if (db > thr) { S.loudMs += ms; if (S.loudMs >= TRIGGER_MS) startClip(now, db); }
+    else S.loudMs = 0;
+    return;
+  }
+  const r = S.rec;
+  r.chunks.push(chunk); r.samples += chunk.length;
+  if (db > thr - 3) { r.lastLoud = now; r.lastLoudSample = r.samples; if (db > r.peak) r.peak = db; }
+  if (now - r.lastLoud > settings.silence * 1000) finishClip(true);
+  else if (r.samples / OUT_RATE >= MAX_CLIP_S) finishClip(false);
+}
+
+/* Room baseline: the quietest 10% of the last 60 seconds, updated all the time (also while recording).
+   Snoring has quiet gaps between breaths, so the baseline stays at the room's level while you snore;
+   a steady new noise (fan, heater, a change in the mic) lifts it within a minute so recording can stop. */
+const FLOOR_WINDOW_MS = 60000, FLOOR_PCT = 0.10;
+const pct = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+function trackLevels(now, db) {
+  const L = S.levels;
+  L.push(now, db);                                    // flat pairs: time, level
+  let cut = 0; while (cut < L.length && now - L[cut] > FLOOR_WINDOW_MS) cut += 2;
+  if (cut) L.splice(0, cut);
+  if (S.floor !== null && now - S.floorCalcAt >= 1000 && L.length >= 40) {
+    S.floorCalcAt = now;
+    const v = []; for (let i = 1; i < L.length; i += 2) v.push(L[i]);
+    v.sort((a, b) => a - b);
+    S.floor = pct(v, FLOOR_PCT);
+  }
+  // Every 5 minutes, write a summary of the levels to the diagnostics log.
+  S.sum.push(db);
+  if (now - S.sumStart >= 300000) {
+    const v = S.sum.sort((a, b) => a - b), r = x => Math.round(x);
+    log(`levels 5 min: quietest ${r(pct(v, 0.1))} · typical ${r(pct(v, 0.5))} · loud ${r(pct(v, 0.9))} · room ${S.floor === null ? "—" : r(S.floor)} · trigger ${S.floor === null ? "—" : r(S.floor + settings.sens)} dB · ${S.rec ? "recording" : "listening"} · rate ${S.ctx ? S.ctx.sampleRate : "—"}`);
+    S.sum = []; S.sumStart = now;
+  }
+}
+
+function pushPre(chunk) {
+  S.pre.push(chunk); S.preSamples += chunk.length;
+  while (S.preSamples - S.pre[0].length > PREROLL_S * OUT_RATE) S.preSamples -= S.pre.shift().length;
+}
+
+function startClip(now, db) {
+  S.rec = { start: now - S.preSamples / OUT_RATE * 1000, chunks: S.pre, samples: S.preSamples, lastLoud: now, lastLoudSample: S.preSamples, peak: db };
+  S.pre = []; S.preSamples = 0; S.loudMs = 0;
+  render();
+}
+
+function finishClip(trim) {
+  const r = S.rec; S.rec = null; render();
+  const n = trim ? Math.min(r.samples, r.lastLoudSample + TAIL_S * OUT_RATE) : r.samples;
+  const pcm = new Int16Array(n); let off = 0;
+  for (const c of r.chunks) { if (off >= n) break; const take = Math.min(c.length, n - off); pcm.set(c.subarray(0, take), off); off += take; }
+  let peak = 1; for (let i = 0; i < n; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
+  const gain = Math.min(8, 29000 / peak);           // lift quiet clips so they're audible
+  if (gain > 1.05) for (let i = 0; i < n; i++) pcm[i] = pcm[i] * gain;
+  const blob = wav(pcm, OUT_RATE), dur = n / OUT_RATE;
+  S.clips++; S.recSeconds += dur;
+  putClip({ id: "c" + r.start, start: r.start, end: r.start + dur * 1000, duration: dur, peakDb: Math.round(r.peak), size: blob.size, blob })
+    .then(refreshList).catch(() => setNote("Couldn't save a recording — the phone may be out of storage.", true));
+}
+
+function wav(pcm, rate) {
+  const buf = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + pcm.length * 2, true); w(8, "WAVE"); w(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+/* ---------- wake lock + dim ---------- */
+async function requestWake() {
+  try { if ("wakeLock" in navigator) S.wakeLock = await navigator.wakeLock.request("screen"); }
+  catch {
+    // Warn once per night; on later retries a failure would only hide the more useful mic message.
+    if (!S.wakeWarned) { S.wakeWarned = true; setNote("Couldn't keep the screen awake. Set Settings → Display & Brightness → Auto-Lock to Never for tonight.", true); }
+  }
+}
+function releaseWake() { try { S.wakeLock && S.wakeLock.release(); } catch {} S.wakeLock = null; }
+document.addEventListener("visibilitychange", () => {
+  if (!S.running) return;
+  log(`screen ${document.visibilityState} · ${where()}`);
+  if (document.visibilityState === "hidden") {
+    micLost();
+    if (!S.gapStart) S.gapStart = Date.now();         // e.g. hidden before the first sound data arrived
+    releaseAudio();                                   // iOS takes the mic in the background anyway; let go cleanly
+    log("released mic while away");
+  } else {
+    requestWake();
+    S.interrupted = 0;
+    S.rebuilds = 0; S.gaveUpLogged = false;
+    S.nextTry = Date.now() + 500;
+    setTimeout(() => restartMic(false), 600);
+  }
+});
+// Any tap counts as the user gesture iOS may want before audio can restart.
+$("resumeBtn").onclick = () => { log("Resume tapped"); restartMic(true); };
+function showDim() { $("dim").hidden = false; }
+function hideDim() { $("dim").hidden = true; }
+// Tapping the dimmed screen only wakes it while an alarm/call/Siri has the audio, so a tap can't silence the alarm.
+$("dim").onclick = () => {
+  hideDim();
+  if (S.running && !S.micOk && S.gapStart && !S.interrupted) { log("dimmed screen tapped: resuming"); restartMic(true); }
+};
+$("dimBtn").onclick = showDim;
+$("startBtn").onclick = () => S.running ? stop() : start();
+
+/* ---------- UI ---------- */
+const fmtDur = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`; };
+const fmtTime = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+const fmtClock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB";
+/* ---------- diagnostics log (kept on this phone only) ---------- */
+let LOG = [];
+try { LOG = JSON.parse(localStorage.getItem("snore.log") || "[]"); } catch {}
+let logSaveTimer = 0;
+function log(msg) {
+  const d = new Date();
+  const line = d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0") + " " + msg;
+  LOG.push(line); if (LOG.length > 400) LOG.splice(0, LOG.length - 400);
+  const v = $("logView"); if (v && $("diagPanel").open) v.textContent = LOG.join("\n");
+  clearTimeout(logSaveTimer);
+  logSaveTimer = setTimeout(() => { try { localStorage.setItem("snore.log", JSON.stringify(LOG)); } catch {} }, 500);
+}
+function trackInfo() {
+  const t = S.stream && S.stream.getAudioTracks()[0];
+  return !t ? "track=none" : `track=${t.readyState}${t.muted ? "/muted" : ""}${t.enabled ? "" : "/disabled"}`;
+}
+const where = () => `${trackInfo()} ctx=${S.ctx ? S.ctx.state : "none"} vis=${document.visibilityState} micOk=${!!S.micOk} restarts=${S.rebuilds || 0}`;
+$("diagPanel").addEventListener("toggle", () => { if ($("diagPanel").open) $("logView").textContent = LOG.join("\n"); });
+$("clearLog").onclick = () => { LOG = []; $("logView").textContent = ""; try { localStorage.removeItem("snore.log"); } catch {} };
+$("copyLog").onclick = async () => {
+  const head = `Snore Log ${$("vSha").textContent} · ${navigator.userAgent} · standalone=${!!(navigator.standalone || matchMedia("(display-mode: standalone)").matches)}`;
+  const text = head + "\n" + LOG.join("\n");
+  try { await navigator.clipboard.writeText(text); $("copyLog").textContent = "Copied"; setTimeout(() => $("copyLog").textContent = "Copy log", 2000); }
+  catch {
+    const v = $("logView"); v.textContent = text;
+    const r = document.createRange(); r.selectNodeContents(v); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    $("copyLog").textContent = "Selected – tap Copy";
+  }
+};
+["pagehide", "pageshow", "freeze", "resume", "focus", "blur"].forEach(ev =>
+  (ev === "focus" || ev === "blur" ? window : document).addEventListener(ev, e => { if (S.running) log(`event ${ev}${e.persisted ? " persisted" : ""} · ${where()}`); }));
+window.addEventListener("pageshow", e => { if (e.persisted) log("page restored from cache"); });
+log("page loaded · " + ($("vSha") ? "" : "") + navigator.userAgent.replace(/^.*?\(/, "(").slice(0, 80));
+
+function setNote(text, warn) { $("note").textContent = text; $("note").classList.toggle("warn", !!warn); }
+
+function render() {
+  const pill = $("pill"), st = $("statusText");
+  const off = S.running && !S.micOk && !!S.gapStart;
+  pill.className = "pill" + (!S.running ? "" : off ? " off" : S.rec ? " recording" : " listening");
+  st.textContent = !S.running ? "Not listening" : off ? (S.interrupted ? "Paused" : "Mic off") : S.rec ? "Recording" : S.floor === null ? "Calibrating" : "Listening";
+  $("resumeBtn").hidden = !off;
+  $("startBtn").textContent = S.running ? "Stop" : "Start listening";
+  $("startBtn").classList.toggle("stop", S.running);
+  $("dimBtn").hidden = !S.running;
+  $("dimStatus").textContent = off ? "Mic off · tap to resume" : S.rec ? "Recording" : "Listening";
+  $("dimStatus").classList.toggle("rec", !!S.rec || off);
+}
+
+function tick() {
+  const el = S.running ? (Date.now() - S.sessionStart) / 1000 : 0;
+  const h = Math.floor(el / 3600), m = Math.floor(el % 3600 / 60), s = Math.floor(el % 60);
+  $("clock").textContent = [h, m, s].map(n => String(n).padStart(2, "0")).join(":");
+  const d = new Date(); $("dimClock").textContent = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const live = S.rec ? S.rec.samples / OUT_RATE : 0;
+  $("sClips").textContent = S.clips + (S.rec ? 1 : 0);
+  $("sRecTime").textContent = fmtDur(S.recSeconds + live);
+  $("sFloor").textContent = S.floor === null ? "—" : Math.round(S.floor) + " dB";
+  $("diag").hidden = !S.running;
+  if (S.running) {
+    const t = S.stream && S.stream.getAudioTracks()[0];
+    const mic = !t ? "none" : t.readyState === "ended" ? "ended" : t.muted ? "paused" : "live";
+    const age = S.lastAudio ? Math.round((Date.now() - S.lastAudio) / 1000) : "—";
+    $("diag").textContent = `mic ${mic} · audio ${S.ctx ? S.ctx.state : "none"} · last sound data ${age}s ago` + (S.rebuilds ? ` · restarts ${S.rebuilds}` : "");
+  }
+  $("levelText").textContent = S.running ? Math.round(S.lastDb) + " dB" : "— dB";
+  render();
+}
+setInterval(tick, 1000);
+
+const cv = $("trace"), g = cv.getContext("2d");
+function draw() {
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth * dpr, H = cv.clientHeight * dpr;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  g.clearRect(0, 0, W, H);
+  const lo = -90, hi = -10, y = db => H - Math.max(0, Math.min(1, (db - lo) / (hi - lo))) * H;
+  const n = 720, bw = W / n, thr = S.floor === null ? null : S.floor + settings.sens;
+  for (let i = 0; i < S.hist.length; i++) {
+    const db = S.hist[i], x = (n - S.hist.length + i) * bw;
+    g.fillStyle = thr !== null && db > thr ? "#ff7a6b" : "#4a5687";
+    g.fillRect(x, y(db), Math.max(1, bw), H - y(db));
+  }
+  if (thr !== null) { g.fillStyle = "#f2c46d"; g.fillRect(0, y(thr), W, Math.max(1, dpr)); }
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ---------- recordings list ---------- */
+const player = new Audio(); let playingId = null, playingUrl = null;
+player.ontimeupdate = () => { const row = document.querySelector(`.clip[data-id="${playingId}"] .bar i`); if (row && player.duration) row.style.width = (player.currentTime / player.duration * 100) + "%"; };
+player.onended = player.onpause = () => { const row = document.querySelector(`.clip[data-id="${playingId}"]`); if (row) { row.classList.remove("playing"); row.querySelector(".play").innerHTML = ICON_PLAY; } if (player.ended) playingId = null; };
+const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>';
+const nightKey = t => { const d = new Date(t - 12 * 3600e3); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+
+async function refreshList() {
+  let clips = [];
+  try { clips = await allClips(); } catch {}
+  clips.sort((a, b) => b.start - a.start);
+  const list = $("list");
+  list.querySelectorAll(".night, .empty").forEach(n => n.remove());
+  const audio = clips.filter(c => c.type !== "gap");
+  const total = audio.reduce((a, c) => a + c.size, 0);
+  $("storage").textContent = audio.length ? `${audio.length} clip${audio.length === 1 ? "" : "s"} · ${fmtSize(total)}` : "No clips yet";
+  if (!clips.length) {
+    const e = document.createElement("div"); e.className = "empty";
+    e.textContent = "No recordings yet. Tap Start listening at bedtime. Each time a sound is detected, a clip is saved here with its date and time, ready to play back in the morning.";
+    list.appendChild(e); return;
+  }
+  const groups = new Map();
+  for (const c of clips) { const k = nightKey(c.start); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c); }
+  for (const [k, cs] of groups) {
+    const sec = document.createElement("div"); sec.className = "night";
+    const head = document.createElement("div"); head.className = "nightHead";
+    const h3 = document.createElement("h3");
+    h3.textContent = "Night of " + new Date(k).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+    const sum = document.createElement("span");
+    const ca = cs.filter(c => c.type !== "gap"), gaps = cs.filter(c => c.type === "gap");
+    let txt = `${ca.length} clip${ca.length === 1 ? "" : "s"} · ${fmtDur(ca.reduce((a, c) => a + c.duration, 0))}`;
+    if (gaps.length) txt += ` · mic off ${fmtDur(gaps.reduce((a, c) => a + c.duration, 0))}`;
+    if (ca.length) txt += " · " + fmtSize(ca.reduce((a, c) => a + c.size, 0));
+    sum.textContent = txt;
+    const right = document.createElement("div"); right.className = "nightRight";
+    const delNight = document.createElement("button"); delNight.className = "small"; delNight.textContent = "Delete night";
+    let armed = null;
+    delNight.onclick = async () => {
+      if (!armed) {
+        delNight.textContent = `Delete ${cs.length} item${cs.length === 1 ? "" : "s"}?`; delNight.classList.add("confirm");
+        armed = setTimeout(() => { armed = null; delNight.textContent = "Delete night"; delNight.classList.remove("confirm"); }, 4000);
+        return;
+      }
+      clearTimeout(armed);
+      if (cs.some(c => c.id === playingId)) { player.pause(); playingId = null; }
+      for (const c of cs) await delClip(c.id).catch(() => {});
+      refreshList();
+    };
+    right.append(sum, delNight);
+    head.append(h3, right);
+    const box = document.createElement("div"); box.className = "clips";
+    for (const c of [...cs].reverse()) box.appendChild(c.type === "gap" ? gapRow(c) : clipRow(c));
+    sec.append(head, box); list.appendChild(sec);
+  }
+}
+
+function gapRow(c) {
+  const row = document.createElement("div"); row.className = "clip gap"; row.dataset.id = c.id;
+  const mark = document.createElement("div"); mark.className = "gapMark";
+  mark.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 4a3 3 0 0 1 6 0v6M15 14a3 3 0 0 1-5.6 1.5M5 11a7 7 0 0 0 11.5 5.3M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"/></svg>';
+  const info = document.createElement("div"); info.className = "info";
+  const t = document.createElement("div"); t.className = "t";
+  t.textContent = "Mic off " + fmtTime(c.start) + " – " + fmtTime(c.end);
+  const m = document.createElement("div"); m.className = "m";
+  m.textContent = fmtDur(c.duration) + " not recorded";
+  info.append(t, m);
+  const del = document.createElement("button"); del.className = "small"; del.textContent = "Remove";
+  del.onclick = async () => { await delClip(c.id).catch(() => {}); refreshList(); };
+  row.append(mark, info, del);
+  return row;
+}
+
+function clipRow(c) {
+  const row = document.createElement("div"); row.className = "clip"; row.dataset.id = c.id;
+  const play = document.createElement("button"); play.className = "play"; play.innerHTML = ICON_PLAY;
+  play.setAttribute("aria-label", "Play recording from " + fmtTime(c.start));
+  const info = document.createElement("div"); info.className = "info";
+  const t = document.createElement("div"); t.className = "t";
+  t.textContent = new Date(c.start).toLocaleDateString([], { month: "short", day: "numeric" }) + " · " + fmtTime(c.start);
+  const m = document.createElement("div"); m.className = "m";
+  m.textContent = `${fmtDur(c.duration)} · peak ${c.peakDb} dB · ${fmtSize(c.size)}`;
+  const bar = document.createElement("div"); bar.className = "bar"; bar.appendChild(document.createElement("i"));
+  info.append(t, m, bar);
+  const btns = document.createElement("div"); btns.className = "rowBtns";
+  const share = document.createElement("button"); share.className = "small"; share.textContent = "Save";
+  const del = document.createElement("button"); del.className = "small"; del.textContent = "Delete";
+  btns.append(share, del);
+  row.append(play, info, btns);
+
+  play.onclick = () => {
+    if (playingId === c.id && !player.paused) { player.pause(); return; }
+    if (playingId !== c.id) {
+      if (playingUrl) URL.revokeObjectURL(playingUrl);
+      document.querySelectorAll(".clip.playing").forEach(r => { r.classList.remove("playing"); r.querySelector(".play").innerHTML = ICON_PLAY; });
+      playingUrl = URL.createObjectURL(c.blob); player.src = playingUrl; playingId = c.id;
+    }
+    player.play().then(() => { row.classList.add("playing"); play.innerHTML = ICON_PAUSE; }).catch(() => {});
+  };
+  share.onclick = async () => {
+    const name = "snore-" + new Date(c.start).toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".wav";
+    const file = new File([c.blob], name, { type: "audio/wav" });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+    } catch (e) { if (e && e.name === "AbortError") return; }
+    const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  let armed = null;
+  del.onclick = async () => {
+    if (!armed) { del.textContent = "Confirm"; del.classList.add("confirm"); armed = setTimeout(() => { armed = null; del.textContent = "Delete"; del.classList.remove("confirm"); }, 3000); return; }
+    clearTimeout(armed);
+    if (playingId === c.id) { player.pause(); playingId = null; }
+    await delClip(c.id).catch(() => {}); refreshList();
+  };
+  return row;
+}
+
+/* ---------- home screen icon ---------- */
+(() => {
+  const c = document.createElement("canvas"); c.width = c.height = 180; const x = c.getContext("2d");
+  x.fillStyle = "#0e1322"; x.fillRect(0, 0, 180, 180);
+  x.fillStyle = "#f2c46d"; x.beginPath(); x.arc(90, 90, 52, 0, Math.PI * 2); x.fill();
+  x.fillStyle = "#0e1322"; x.beginPath(); x.arc(112, 74, 46, 0, Math.PI * 2); x.fill();
+  x.fillStyle = "#f2c46d"; x.font = "bold 30px -apple-system, sans-serif"; x.fillText("z", 118, 128); x.font = "bold 22px -apple-system, sans-serif"; x.fillText("z", 140, 104);
+  $("touchIcon").href = c.toDataURL("image/png");
+})();
+
+if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+  setNote("This browser can't use the microphone here. Open the page over https:// in Safari.", true);
+}
+/* ---------- version stamp ---------- */
+(() => {
+  const meta = n => (document.querySelector(`meta[name="${n}"]`) || {}).content || "";
+  const sha = meta("build-sha"), full = meta("build-full-sha"), when = meta("build-time");
+  const stamped = sha && !sha.startsWith("__");
+  const fmtFull = d => d.toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+  if (stamped) {
+    $("vSha").textContent = sha;
+    $("vSha").href = "https://github.com/insanum/snore-log/commit/" + full;
+    const d = new Date(when);
+    $("vBuilt").textContent = isNaN(d) ? when : fmtFull(d);
+  } else {
+    $("vSha").textContent = "dev (not published)";
+  }
+  $("vLoaded").textContent = fmtFull(new Date());
+})();
+
+/* ---------- update check ----------
+   GitHub Pages lets phones keep a saved copy of the page for a while, and Home Screen apps hold on to it.
+   Fetch the live page directly, compare its version with ours, and offer to load the new one. */
+const myVersion = ((document.querySelector('meta[name="build-sha"]') || {}).content) || "";
+let liveVersion = null, lastCheck = 0;
+async function checkForUpdate() {
+  if (!myVersion || myVersion.startsWith("__") || Date.now() - lastCheck < 30000) return;
+  lastCheck = Date.now();
+  try {
+    const r = await fetch(location.pathname + "?check=" + Date.now(), { cache: "no-store" });
+    const m = (await r.text()).match(/name="build-sha" content="([^"]+)"/);
+    const live = m && m[1];
+    if (!live || live.startsWith("__") || live === myVersion) return;
+    liveVersion = live;
+    $("updateText").textContent = `Version ${live} is available (you have ${myVersion}).`;
+    $("updateBar").hidden = false;
+    log(`update available: ${myVersion} → ${live}`);
+  } catch {}
+}
+$("updateBtn").onclick = async () => {
+  if (S.running) await stop();                       // saves the clip in progress
+  location.replace(location.pathname + "?v=" + (liveVersion || Date.now()));
+};
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
+checkForUpdate();
+
+render(); refreshList();
+})();
+</script>
+</body>
+</html>

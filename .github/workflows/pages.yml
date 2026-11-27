@@ -30,8 +30,9 @@ jobs:
           SHA=$(git rev-parse --short HEAD)
           FULL=$(git rev-parse HEAD)
           WHEN=$(git log -1 --format=%cI)
-          sed -i "s/__BUILD_SHA__/$SHA/g; s/__BUILD_FULL_SHA__/$FULL/g; s/__BUILD_TIME__/$WHEN/g" _site/index.html
-          grep -o 'name="build-[a-z-]*" content="[^"]*"' _site/index.html
+          # Stamp every page: the web app shows it, and the home page carries it so older copies of the app notice updates.
+          find _site -name "*.html" -exec sed -i "s/__BUILD_SHA__/$SHA/g; s/__BUILD_FULL_SHA__/$FULL/g; s/__BUILD_TIME__/$WHEN/g" {} +
+          grep -o 'name="build-[a-z-]*" content="[^"]*"' _site/index.html _site/app/index.html
 
       - uses: actions/configure-pages@v5
 
