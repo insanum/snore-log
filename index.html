@@ -47,6 +47,11 @@ h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--mute
 .pill i{width:8px;height:8px;border-radius:50%;background:currentColor}
 .pill.listening{color:var(--moon)}
 .pill.recording{color:var(--rec);background:#3a1f26}
+.pill.off{color:var(--text);background:#4a2330}
+.clip.gap{grid-template-columns:44px 1fr auto;background:repeating-linear-gradient(135deg,transparent 0 8px,#1b2238 8px 16px)}
+.gapMark{width:44px;height:44px;display:grid;place-items:center}
+.gapMark svg{width:20px;height:20px;fill:none;stroke:var(--rec);stroke-width:2;stroke-linecap:round}
+.clip.gap .t{color:var(--rec)}
 .pill.recording i{animation:pulse 1.2s infinite}
 @keyframes pulse{50%{opacity:.25}}
 .clock{font:600 13px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
@@ -225,9 +230,19 @@ function makeDownsampler(inRate) {
   };
 }
 
+const MIC_OPTS = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
+const MIN_GAP_MS = 5000;
+
+function watchTracks() {
+  S.stream.getAudioTracks().forEach(t => {
+    t.onended = () => micLost();
+    t.onmute = () => micLost();
+  });
+}
+
 async function start() {
   try {
-    S.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    S.stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
   } catch (e) {
     setNote("Microphone access was refused. Allow the microphone for this page in Settings → Safari → Microphone, then try again.", true);
     return;
@@ -241,16 +256,76 @@ async function start() {
   S.sink = S.ctx.createGain(); S.sink.gain.value = 0;
   S.src.connect(S.node); S.node.connect(S.sink); S.sink.connect(S.ctx.destination);
   S.node.onaudioprocess = onAudio;
-  S.ctx.onstatechange = () => { if (S.running && S.ctx.state !== "running") S.ctx.resume().catch(() => {}); };
-  S.stream.getAudioTracks().forEach(t => t.onended = () => { if (S.running) setNote("The microphone stopped (screen locked or another app took it). Tap Stop, then Start again.", true); });
-  Object.assign(S, { running: true, floor: null, calib: [], calibMs: 0, loudMs: 0, rec: null, pre: [], preSamples: 0,
-    sessionStart: Date.now(), clips: 0, recSeconds: 0, hist: [] });
+  S.ctx.onstatechange = () => {
+    if (!S.running || !S.ctx || S.ctx.state === "running") return;
+    micLost(); S.ctx.resume().catch(() => {});
+  };
+  watchTracks();
+  Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
+    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
   requestWake();
   setNote("Measuring room noise for a few seconds… stay quiet.");
   render();
 }
 
+/* The mic went away (screen locked, app left, call, Siri, alarm): keep what we have and note the gap. */
+function micLost() {
+  if (!S.running || !S.micOk) return;
+  S.micOk = false;
+  S.gapStart = S.lastAudio || Date.now();
+  if (S.rec) finishClip(false);
+  S.pre = []; S.preSamples = 0; S.loudMs = 0;
+  setNote("The microphone stopped at " + fmtClock(S.gapStart) + ". It restarts when this screen is back on. Tap the screen if it doesn't.", true);
+  render();
+}
+
+/* Mic audio is flowing again: close the gap. */
+function micBack(now) {
+  S.micOk = true; S.zeroMs = 0;
+  if (S.gapStart) {
+    const start = S.gapStart; S.gapStart = null;
+    saveGap(start, now);
+    setNote("Listening again. The mic was off from " + fmtClock(start) + " to " + fmtClock(now) + ".");
+  }
+  render();
+}
+
+function saveGap(start, end) {
+  if (end - start < MIN_GAP_MS) return;
+  S.gapMs += end - start;
+  putClip({ id: "g" + start, type: "gap", start, end, duration: (end - start) / 1000, size: 0 }).then(refreshList).catch(() => {});
+}
+
+async function restartMic() {
+  if (!S.running || S.micOk || S.restarting) return;
+  S.restarting = true;
+  try {
+    const live = S.stream && S.stream.getAudioTracks().some(t => t.readyState === "live" && !t.muted);
+    if (!live) {
+      try { S.src && S.src.disconnect(); } catch {}
+      S.stream && S.stream.getTracks().forEach(t => t.stop());
+      S.stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+      S.src = S.ctx.createMediaStreamSource(S.stream);
+      S.src.connect(S.node);
+      watchTracks();
+    }
+    await S.ctx.resume();
+    requestWake();
+  } catch {
+    setNote("Couldn't restart the microphone. Tap the screen to try again.", true);
+  }
+  S.restarting = false;
+}
+
+/* If no audio arrives for a few seconds while the page is open, treat the mic as lost and try to bring it back. */
+setInterval(() => {
+  if (!S.running) return;
+  if (S.micOk && Date.now() - S.lastAudio > 4000) micLost();
+  if (!S.micOk && S.gapStart && document.visibilityState === "visible") restartMic();
+}, 2000);
+
 async function stop() {
+  if (S.running && !S.micOk && S.gapStart) { saveGap(S.gapStart, Date.now()); S.gapStart = null; }
   S.running = false;
   if (S.rec) finishClip(false);
   try { S.node && (S.node.onaudioprocess = null); S.src && S.src.disconnect(); S.node && S.node.disconnect(); } catch {}
@@ -267,6 +342,20 @@ function onAudio(e) {
   let sq = 0; for (let i = 0; i < input.length; i++) sq += input[i] * input[i];
   const db = 20 * Math.log10(Math.sqrt(sq / input.length) + 1e-9);
   const ms = input.length / S.ctx.sampleRate * 1000, now = Date.now();
+  // A real microphone never delivers perfect digital silence; iOS does when it has taken the mic away.
+  if (sq === 0) {
+    S.zeroMs += ms;
+    if (S.zeroMs > 3000) micLost();
+    if (!S.micOk) return;
+  } else {
+    S.zeroMs = 0;
+    S.lastAudio = now;
+    if (!S.micOk) {
+      // Leftover buffered audio can arrive just after the mic stops; only count it as back if the mic really is live.
+      if (!(S.stream && S.stream.getAudioTracks().some(t => t.readyState === "live" && !t.muted))) return;
+      micBack(now);
+    }
+  }
   const chunk = S.ds(input);
   S.lastDb = db; S.hist.push(db); if (S.hist.length > 720) S.hist.shift();
 
@@ -335,8 +424,12 @@ async function requestWake() {
 }
 function releaseWake() { try { S.wakeLock && S.wakeLock.release(); } catch {} S.wakeLock = null; }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && S.running) { requestWake(); S.ctx && S.ctx.resume().catch(() => {}); }
+  if (!S.running) return;
+  if (document.visibilityState === "hidden") micLost();   // iOS cuts the mic when the page leaves the screen
+  else { requestWake(); restartMic(); }
 });
+// Any tap counts as the user gesture iOS may want before audio can restart.
+document.addEventListener("pointerdown", () => { if (S.running && !S.micOk && S.gapStart) restartMic(); }, true);
 function showDim() { $("dim").hidden = false; }
 function hideDim() { $("dim").hidden = true; }
 $("dim").onclick = hideDim;
@@ -347,18 +440,20 @@ $("startBtn").onclick = () => S.running ? stop() : start();
 const fmtDur = s => { s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`; };
 const fmtTime = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+const fmtClock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const fmtSize = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB";
 function setNote(text, warn) { $("note").textContent = text; $("note").classList.toggle("warn", !!warn); }
 
 function render() {
   const pill = $("pill"), st = $("statusText");
-  pill.className = "pill" + (S.running ? (S.rec ? " recording" : " listening") : "");
-  st.textContent = !S.running ? "Not listening" : S.rec ? "Recording" : S.floor === null ? "Calibrating" : "Listening";
+  const off = S.running && !S.micOk && !!S.gapStart;
+  pill.className = "pill" + (!S.running ? "" : off ? " off" : S.rec ? " recording" : " listening");
+  st.textContent = !S.running ? "Not listening" : off ? "Mic off" : S.rec ? "Recording" : S.floor === null ? "Calibrating" : "Listening";
   $("startBtn").textContent = S.running ? "Stop" : "Start listening";
   $("startBtn").classList.toggle("stop", S.running);
   $("dimBtn").hidden = !S.running;
-  $("dimStatus").textContent = S.rec ? "Recording" : "Listening";
-  $("dimStatus").classList.toggle("rec", !!S.rec);
+  $("dimStatus").textContent = off ? "Mic off · tap to resume" : S.rec ? "Recording" : "Listening";
+  $("dimStatus").classList.toggle("rec", !!S.rec || off);
 }
 
 function tick() {
@@ -406,8 +501,9 @@ async function refreshList() {
   clips.sort((a, b) => b.start - a.start);
   const list = $("list");
   list.querySelectorAll(".night, .empty").forEach(n => n.remove());
-  const total = clips.reduce((a, c) => a + c.size, 0);
-  $("storage").textContent = clips.length ? `${clips.length} clips · ${fmtSize(total)}` : "No clips yet";
+  const audio = clips.filter(c => c.type !== "gap");
+  const total = audio.reduce((a, c) => a + c.size, 0);
+  $("storage").textContent = audio.length ? `${audio.length} clip${audio.length === 1 ? "" : "s"} · ${fmtSize(total)}` : "No clips yet";
   if (!clips.length) {
     const e = document.createElement("div"); e.className = "empty";
     e.textContent = "No recordings yet. Tap Start listening at bedtime. Each time a sound is detected, a clip is saved here with its date and time, ready to play back in the morning.";
@@ -421,12 +517,31 @@ async function refreshList() {
     const h3 = document.createElement("h3");
     h3.textContent = "Night of " + new Date(k).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
     const sum = document.createElement("span");
-    sum.textContent = `${cs.length} clip${cs.length > 1 ? "s" : ""} · ${fmtDur(cs.reduce((a, c) => a + c.duration, 0))}`;
+    const ca = cs.filter(c => c.type !== "gap"), gaps = cs.filter(c => c.type === "gap");
+    let txt = `${ca.length} clip${ca.length === 1 ? "" : "s"} · ${fmtDur(ca.reduce((a, c) => a + c.duration, 0))}`;
+    if (gaps.length) txt += ` · mic off ${fmtDur(gaps.reduce((a, c) => a + c.duration, 0))}`;
+    sum.textContent = txt;
     head.append(h3, sum);
     const box = document.createElement("div"); box.className = "clips";
-    for (const c of [...cs].reverse()) box.appendChild(clipRow(c));
+    for (const c of [...cs].reverse()) box.appendChild(c.type === "gap" ? gapRow(c) : clipRow(c));
     sec.append(head, box); list.appendChild(sec);
   }
+}
+
+function gapRow(c) {
+  const row = document.createElement("div"); row.className = "clip gap"; row.dataset.id = c.id;
+  const mark = document.createElement("div"); mark.className = "gapMark";
+  mark.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 4a3 3 0 0 1 6 0v6M15 14a3 3 0 0 1-5.6 1.5M5 11a7 7 0 0 0 11.5 5.3M19 11a7 7 0 0 1-.6 2.8M12 18v3M3 3l18 18"/></svg>';
+  const info = document.createElement("div"); info.className = "info";
+  const t = document.createElement("div"); t.className = "t";
+  t.textContent = "Mic off " + fmtTime(c.start) + " – " + fmtTime(c.end);
+  const m = document.createElement("div"); m.className = "m";
+  m.textContent = fmtDur(c.duration) + " not recorded";
+  info.append(t, m);
+  const del = document.createElement("button"); del.className = "small"; del.textContent = "Remove";
+  del.onclick = async () => { await delClip(c.id).catch(() => {}); refreshList(); };
+  row.append(mark, info, del);
+  return row;
 }
 
 function clipRow(c) {

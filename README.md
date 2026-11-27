@@ -14,4 +14,4 @@ A one-page web app that listens overnight and records only when it hears a sound
 2. At bedtime, open Snore Log, tap **Start listening** and allow the microphone.
 3. Leave the app open on screen with the phone on charge. Tap **Dim** to black out the screen.
 
-iPhone turns off the microphone if the screen locks or you switch apps, so the app must stay in front all night.
+iPhone turns off the microphone if the screen locks or you switch apps, so the app must stay in front all night. If the mic does stop, Snore Log saves the clip it was recording, restarts the mic as soon as the app is back on screen (or you tap it), and adds a "Mic off" entry to that night so you can see what was missed.
