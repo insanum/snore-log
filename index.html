@@ -611,7 +611,11 @@ document.addEventListener("visibilitychange", () => {
 $("resumeBtn").onclick = () => { log("Resume tapped"); restartMic(true); };
 function showDim() { $("dim").hidden = false; }
 function hideDim() { $("dim").hidden = true; }
-$("dim").onclick = () => { hideDim(); if (S.running && !S.micOk && S.gapStart) restartMic(true); };
+// Tapping the dimmed screen only wakes it while an alarm/call/Siri has the audio, so a tap can't silence the alarm.
+$("dim").onclick = () => {
+  hideDim();
+  if (S.running && !S.micOk && S.gapStart && !S.interrupted) { log("dimmed screen tapped: resuming"); restartMic(true); }
+};
 $("dimBtn").onclick = showDim;
 $("startBtn").onclick = () => S.running ? stop() : start();
 
