@@ -39,7 +39,7 @@ struct NightDetailView: View {
                         .onDelete { offsets in
                             let items = Array(night.clips.reversed())
                             for i in offsets {
-                                if player.playingID == items[i].id { player.stop() }
+                                if player.activeID == items[i].id { player.stop() }
                                 store.delete(items[i])
                             }
                         }
@@ -125,37 +125,136 @@ private struct ClipRow: View {
     @EnvironmentObject private var player: Player
 
     var body: some View {
-        let playing = player.playingID == clip.id
-        HStack(spacing: 12) {
-            Button {
-                if let url { onPlay(url) }
-            } label: {
-                Image(systemName: playing ? "pause.fill" : "play.fill")
-                    .frame(width: 40, height: 40)
-                    .background(playing ? Theme.moon : Color.white.opacity(0.08), in: Circle())
-                    .foregroundStyle(playing ? Color.black : Theme.moon)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(playing ? "Pause" : "Play recording from \(Format.time(clip.start))")
+        let active = player.activeID == clip.id
+        let playing = active && player.isPlaying
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Button {
+                    if let url { onPlay(url) }
+                } label: {
+                    Image(systemName: playing ? "pause.fill" : "play.fill")
+                        .frame(width: 40, height: 40)
+                        .background(active ? Theme.moon : Color.white.opacity(0.08), in: Circle())
+                        .foregroundStyle(active ? Color.black : Theme.moon)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(playing ? "Pause" : "Play recording from \(Format.time(clip.start))")
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(Format.timeWithSeconds(clip.start)).font(.body.monospacedDigit().weight(.semibold))
-                Text("\(Format.duration(clip.duration)) · peak \(Format.db(clip.peakDb)) · \(Format.size(clip.bytes))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                if playing {
-                    ProgressView(value: player.progress).tint(Theme.moon)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Format.timeWithSeconds(clip.start)).font(.body.monospacedDigit().weight(.semibold))
+                    Text("\(Format.duration(clip.duration)) · peak \(Format.db(clip.peakDb)) · \(Format.size(clip.bytes))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let url {
+                    ShareLink(item: url) {
+                        Image(systemName: "square.and.arrow.up").accessibilityLabel("Share or save")
+                    }
+                    .buttonStyle(.borderless)
                 }
             }
-            Spacer()
-            if let url {
-                ShareLink(item: url) {
-                    Image(systemName: "square.and.arrow.up").accessibilityLabel("Share or save")
-                }
-                .buttonStyle(.borderless)
+            if active {
+                PlaybackControls()
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// Scrub bar, 10-second skips, and hold-the-forward-button for 2x speed.
+private struct PlaybackControls: View {
+    @EnvironmentObject private var player: Player
+    @State private var scrubbing = false
+    @State private var scrubTime: TimeInterval = 0
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Slider(value: Binding(get: { scrubbing ? scrubTime : player.currentTime },
+                                  set: { scrubTime = $0 }),
+                   in: 0...max(player.duration, 0.1),
+                   onEditingChanged: { editing in
+                       if editing {
+                           scrubTime = player.currentTime
+                           scrubbing = true
+                       } else {
+                           player.seek(to: scrubTime)
+                           scrubbing = false
+                       }
+                   })
+            .accessibilityLabel("Position")
+            HStack {
+                Text(Format.duration(scrubbing ? scrubTime : player.currentTime))
+                Spacer()
+                Button {
+                    player.skip(by: -10)
+                } label: {
+                    Image(systemName: "gobackward.10").font(.title3)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Back 10 seconds")
+                HoldForFastButton()
+                    .padding(.leading, 28)
+                Spacer()
+                Text("-" + Format.duration(max(0, player.duration - (scrubbing ? scrubTime : player.currentTime))))
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding(.leading, 52)
+        // Keep List row taps from triggering on the controls.
+        .buttonStyle(.borderless)
+    }
+}
+
+/// Tap: forward 10 seconds. Press and hold: play at 2x until released.
+private struct HoldForFastButton: View {
+    @EnvironmentObject private var player: Player
+    @State private var pressStart: Date?
+    @State private var holdTask: Task<Void, Never>?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: "goforward.10")
+                .font(.title3)
+                .foregroundStyle(Theme.moon)
+                .frame(width: 44, height: 36)
+                .contentShape(Rectangle())
+            if player.isFast {
+                Text("2×")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 4)
+                    .background(Theme.moon, in: Capsule())
+                    .foregroundStyle(.black)
+                    .offset(x: 10, y: -8)
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard pressStart == nil else { return }
+                    pressStart = Date()
+                    holdTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        guard !Task.isCancelled, pressStart != nil else { return }
+                        player.setFast(true)
+                    }
+                }
+                .onEnded { _ in
+                    holdTask?.cancel()
+                    holdTask = nil
+                    if player.isFast {
+                        player.setFast(false)
+                    } else {
+                        player.skip(by: 10)
+                    }
+                    pressStart = nil
+                }
+        )
+        .accessibilityElement()
+        .accessibilityLabel("Forward 10 seconds. Hold for double speed.")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { player.skip(by: 10) }
     }
 }
 

@@ -52,6 +52,16 @@ h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--mute
 .pill.listening{color:var(--moon)}
 .pill.recording{color:var(--rec);background:#3a1f26}
 .pill.off{color:var(--text);background:#4a2330}
+.controls{grid-column:1/-1;display:none;gap:8px;padding:2px 0 4px 56px}
+.clip.active .controls{display:grid}
+.seekRow{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;font:12px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.seekRow input{width:100%;accent-color:var(--moon);margin:0}
+.skipRow{display:flex;justify-content:center;gap:28px}
+.skip{position:relative;display:inline-flex;align-items:center;gap:4px;background:#232c4a;color:var(--moon);font:600 13px var(--mono);padding:8px 14px;border-radius:999px;
+  -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;touch-action:manipulation}
+.skip svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.skip .fast{position:absolute;top:-8px;right:-8px;background:var(--moon);color:#1d1606;font:700 11px var(--body);padding:1px 5px;border-radius:999px}
+.skipHint{text-align:center;font-size:11px;color:var(--muted)}
 .clip.gap{grid-template-columns:44px 1fr auto;background:repeating-linear-gradient(135deg,transparent 0 8px,#1b2238 8px 16px)}
 .gapMark{width:44px;height:44px;display:grid;place-items:center}
 .gapMark svg{width:20px;height:20px;fill:none;stroke:var(--rec);stroke-width:2;stroke-linecap:round}
@@ -722,8 +732,31 @@ requestAnimationFrame(draw);
 
 /* ---------- recordings list ---------- */
 const player = new Audio(); let playingId = null, playingUrl = null;
-player.ontimeupdate = () => { const row = document.querySelector(`.clip[data-id="${playingId}"] .bar i`); if (row && player.duration) row.style.width = (player.currentTime / player.duration * 100) + "%"; };
-player.onended = player.onpause = () => { const row = document.querySelector(`.clip[data-id="${playingId}"]`); if (row) { row.classList.remove("playing"); row.querySelector(".play").innerHTML = ICON_PLAY; } if (player.ended) playingId = null; };
+let scrubbing = false;
+const activeRow = () => playingId ? document.querySelector(`.clip[data-id="${playingId}"]`) : null;
+function showPosition() {
+  const row = activeRow(); if (!row || !isFinite(player.duration)) return;
+  const seek = row.querySelector(".seek");
+  seek.max = player.duration.toFixed(2);
+  if (!scrubbing) seek.value = player.currentTime;
+  const at = scrubbing ? +seek.value : player.currentTime;
+  row.querySelector(".tAt").textContent = fmtDur(at);
+  row.querySelector(".tLeft").textContent = "-" + fmtDur(Math.max(0, player.duration - at));
+}
+player.ontimeupdate = player.onloadedmetadata = showPosition;
+player.onpause = () => { const row = activeRow(); if (row) { row.classList.remove("playing"); row.querySelector(".play").innerHTML = ICON_PLAY; } };
+player.onplay = () => { const row = activeRow(); if (row) { row.classList.add("playing"); row.querySelector(".play").innerHTML = ICON_PAUSE; } };
+player.onended = () => {
+  const row = activeRow();
+  if (row) { row.classList.remove("playing", "active"); row.querySelector(".play").innerHTML = ICON_PLAY; }
+  player.playbackRate = 1; playingId = null;
+};
+function setFast(on, row) {
+  player.playbackRate = on ? 2 : 1;
+  try { player.preservesPitch = true; player.webkitPreservesPitch = true; } catch {}
+  const b = row && row.querySelector(".fast"); if (b) b.hidden = !on;
+  if (on && player.paused) player.play().catch(() => {});
+}
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>';
 const nightKey = t => { const d = new Date(t - 12 * 3600e3); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
@@ -802,23 +835,66 @@ function clipRow(c) {
   t.textContent = new Date(c.start).toLocaleDateString([], { month: "short", day: "numeric" }) + " · " + fmtTime(c.start);
   const m = document.createElement("div"); m.className = "m";
   m.textContent = `${fmtDur(c.duration)} · peak ${c.peakDb} dB · ${fmtSize(c.size)}`;
-  const bar = document.createElement("div"); bar.className = "bar"; bar.appendChild(document.createElement("i"));
-  info.append(t, m, bar);
+  info.append(t, m);
   const btns = document.createElement("div"); btns.className = "rowBtns";
   const share = document.createElement("button"); share.className = "small"; share.textContent = "Save";
   const del = document.createElement("button"); del.className = "small"; del.textContent = "Delete";
   btns.append(share, del);
-  row.append(play, info, btns);
+  // Playback controls, shown while this clip is loaded: scrub bar, back 10 s, forward 10 s (hold for 2x).
+  const controls = document.createElement("div"); controls.className = "controls";
+  const seekRow = document.createElement("div"); seekRow.className = "seekRow";
+  const tAt = document.createElement("span"); tAt.className = "tAt"; tAt.textContent = "0:00";
+  const seek = document.createElement("input"); seek.type = "range"; seek.className = "seek"; seek.min = "0"; seek.max = String(c.duration); seek.step = "0.1"; seek.value = "0";
+  seek.setAttribute("aria-label", "Position");
+  const tLeft = document.createElement("span"); tLeft.className = "tLeft"; tLeft.textContent = "-" + fmtDur(c.duration);
+  seekRow.append(tAt, seek, tLeft);
+  const skipRow = document.createElement("div"); skipRow.className = "skipRow";
+  const back = document.createElement("button"); back.className = "skip";
+  back.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>10';
+  back.setAttribute("aria-label", "Back 10 seconds");
+  const fwd = document.createElement("button"); fwd.className = "skip";
+  fwd.innerHTML = '10<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg><span class="fast" hidden>2×</span>';
+  fwd.setAttribute("aria-label", "Forward 10 seconds. Hold for double speed.");
+  skipRow.append(back, fwd);
+  const hint = document.createElement("div"); hint.className = "skipHint"; hint.textContent = "Hold 10 ▸ for 2× speed";
+  controls.append(seekRow, skipRow, hint);
+  row.append(play, info, btns, controls);
+  if (playingId === c.id) {                         // the list was rebuilt while this clip is loaded
+    row.classList.add("active");
+    if (!player.paused) { row.classList.add("playing"); play.innerHTML = ICON_PAUSE; }
+    setTimeout(showPosition, 0);
+  }
 
   play.onclick = () => {
-    if (playingId === c.id && !player.paused) { player.pause(); return; }
-    if (playingId !== c.id) {
-      if (playingUrl) URL.revokeObjectURL(playingUrl);
-      document.querySelectorAll(".clip.playing").forEach(r => { r.classList.remove("playing"); r.querySelector(".play").innerHTML = ICON_PLAY; });
-      playingUrl = URL.createObjectURL(c.blob); player.src = playingUrl; playingId = c.id;
-    }
-    player.play().then(() => { row.classList.add("playing"); play.innerHTML = ICON_PAUSE; }).catch(() => {});
+    if (playingId === c.id) { if (player.paused) player.play().catch(() => {}); else player.pause(); return; }
+    if (playingUrl) URL.revokeObjectURL(playingUrl);
+    document.querySelectorAll(".clip.active").forEach(r => { r.classList.remove("playing", "active"); r.querySelector(".play").innerHTML = ICON_PLAY; });
+    player.pause(); player.playbackRate = 1;
+    playingUrl = URL.createObjectURL(c.blob); player.src = playingUrl; playingId = c.id;
+    row.classList.add("active");
+    player.play().catch(() => {});
   };
+  seek.oninput = () => { scrubbing = true; showPosition(); };
+  seek.onchange = () => { if (playingId === c.id) player.currentTime = +seek.value; scrubbing = false; showPosition(); };
+  back.onclick = () => { if (playingId === c.id) { player.currentTime = Math.max(0, player.currentTime - 10); showPosition(); } };
+  // Forward: a tap skips 10 s; pressing and holding plays at 2x until released.
+  let holdTimer = null, fast = false;
+  const endPress = skipIfTap => {
+    if (holdTimer === null && !fast) return;
+    clearTimeout(holdTimer); holdTimer = null;
+    if (fast) { fast = false; setFast(false, row); }
+    else if (skipIfTap && playingId === c.id) { player.currentTime = Math.min(player.duration || 0, player.currentTime + 10); showPosition(); }
+  };
+  fwd.addEventListener("pointerdown", e => {
+    if (playingId !== c.id) return;
+    e.preventDefault();
+    try { fwd.setPointerCapture(e.pointerId); } catch {}
+    holdTimer = setTimeout(() => { holdTimer = null; fast = true; setFast(true, row); }, 350);
+  });
+  fwd.addEventListener("pointerup", () => endPress(true));
+  fwd.addEventListener("pointercancel", () => endPress(false));
+  fwd.addEventListener("contextmenu", e => e.preventDefault());
+  fwd.addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && playingId === c.id) { e.preventDefault(); player.currentTime = Math.min(player.duration || 0, player.currentTime + 10); showPosition(); } });
   share.onclick = async () => {
     const name = "snore-" + new Date(c.start).toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".wav";
     const file = new File([c.blob], name, { type: "audio/wav" });
