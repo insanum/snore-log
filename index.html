@@ -86,6 +86,8 @@ select{background:var(--panel);color:var(--text);border:1px solid var(--line);bo
 .night{display:flex;flex-direction:column;gap:6px}
 .nightHead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:0 2px}
 .nightHead h3{margin:0;font-size:16px}
+.nightHead{flex-wrap:wrap}
+.nightRight{display:flex;align-items:baseline;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .nightHead span{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .clips{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
 .clip{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;padding:10px 12px;border-top:1px solid var(--line)}
@@ -322,7 +324,7 @@ async function start() {
   wire(ctx, stream);
   Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
     loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, nextTry: 0,
-    rebuilds: 0, gaveUpLogged: false, clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
+    rebuilds: 0, gaveUpLogged: false, levels: [], floorCalcAt: 0, sum: [], sumStart: Date.now(), clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
   requestWake();
   log(`START · ${where()}`);
   setNote("Measuring room noise for a few seconds… stay quiet.");
@@ -465,6 +467,7 @@ function onAudio(e) {
   }
   const chunk = S.ds(input);
   S.lastDb = db; S.hist.push(db); if (S.hist.length > 720) S.hist.shift();
+  trackLevels(now, db);
 
   if (S.floor === null) {                          // calibration
     S.calib.push(db); S.calibMs += ms; pushPre(chunk);
@@ -476,10 +479,7 @@ function onAudio(e) {
   if (!S.rec) {
     pushPre(chunk);
     if (db > thr) { S.loudMs += ms; if (S.loudMs >= TRIGGER_MS) startClip(now, db); }
-    else {
-      S.loudMs = 0;
-      S.floor += (db - S.floor) * (db < S.floor ? 0.2 : 0.003);   // drop fast, rise slowly
-    }
+    else S.loudMs = 0;
     return;
   }
   const r = S.rec;
@@ -487,6 +487,31 @@ function onAudio(e) {
   if (db > thr - 3) { r.lastLoud = now; r.lastLoudSample = r.samples; if (db > r.peak) r.peak = db; }
   if (now - r.lastLoud > settings.silence * 1000) finishClip(true);
   else if (r.samples / OUT_RATE >= MAX_CLIP_S) finishClip(false);
+}
+
+/* Room baseline: the quietest 10% of the last 60 seconds, updated all the time (also while recording).
+   Snoring has quiet gaps between breaths, so the baseline stays at the room's level while you snore;
+   a steady new noise (fan, heater, a change in the mic) lifts it within a minute so recording can stop. */
+const FLOOR_WINDOW_MS = 60000, FLOOR_PCT = 0.10;
+const pct = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+function trackLevels(now, db) {
+  const L = S.levels;
+  L.push(now, db);                                    // flat pairs: time, level
+  let cut = 0; while (cut < L.length && now - L[cut] > FLOOR_WINDOW_MS) cut += 2;
+  if (cut) L.splice(0, cut);
+  if (S.floor !== null && now - S.floorCalcAt >= 1000 && L.length >= 40) {
+    S.floorCalcAt = now;
+    const v = []; for (let i = 1; i < L.length; i += 2) v.push(L[i]);
+    v.sort((a, b) => a - b);
+    S.floor = pct(v, FLOOR_PCT);
+  }
+  // Every 5 minutes, write a summary of the levels to the diagnostics log.
+  S.sum.push(db);
+  if (now - S.sumStart >= 300000) {
+    const v = S.sum.sort((a, b) => a - b), r = x => Math.round(x);
+    log(`levels 5 min: quietest ${r(pct(v, 0.1))} · typical ${r(pct(v, 0.5))} · loud ${r(pct(v, 0.9))} · room ${S.floor === null ? "—" : r(S.floor)} · trigger ${S.floor === null ? "—" : r(S.floor + settings.sens)} dB · ${S.rec ? "recording" : "listening"} · rate ${S.ctx ? S.ctx.sampleRate : "—"}`);
+    S.sum = []; S.sumStart = now;
+  }
 }
 
 function pushPre(chunk) {
@@ -682,8 +707,24 @@ async function refreshList() {
     const ca = cs.filter(c => c.type !== "gap"), gaps = cs.filter(c => c.type === "gap");
     let txt = `${ca.length} clip${ca.length === 1 ? "" : "s"} · ${fmtDur(ca.reduce((a, c) => a + c.duration, 0))}`;
     if (gaps.length) txt += ` · mic off ${fmtDur(gaps.reduce((a, c) => a + c.duration, 0))}`;
+    if (ca.length) txt += " · " + fmtSize(ca.reduce((a, c) => a + c.size, 0));
     sum.textContent = txt;
-    head.append(h3, sum);
+    const right = document.createElement("div"); right.className = "nightRight";
+    const delNight = document.createElement("button"); delNight.className = "small"; delNight.textContent = "Delete night";
+    let armed = null;
+    delNight.onclick = async () => {
+      if (!armed) {
+        delNight.textContent = `Delete ${cs.length} item${cs.length === 1 ? "" : "s"}?`; delNight.classList.add("confirm");
+        armed = setTimeout(() => { armed = null; delNight.textContent = "Delete night"; delNight.classList.remove("confirm"); }, 4000);
+        return;
+      }
+      clearTimeout(armed);
+      if (cs.some(c => c.id === playingId)) { player.pause(); playingId = null; }
+      for (const c of cs) await delClip(c.id).catch(() => {});
+      refreshList();
+    };
+    right.append(sum, delNight);
+    head.append(h3, right);
     const box = document.createElement("div"); box.className = "clips";
     for (const c of [...cs].reverse()) box.appendChild(c.type === "gap" ? gapRow(c) : clipRow(c));
     sec.append(head, box); list.appendChild(sec);
