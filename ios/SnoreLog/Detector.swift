@@ -6,7 +6,7 @@ import Foundation
 /// - start a clip when a sound is `sensitivity` dB louder than the room for at least a quarter of a second,
 ///   including the 3 seconds before it;
 /// - end the clip after `silenceSeconds` without loud sounds, trimming the quiet tail
-///   (a sound has to stay loud for ~0.2 s to restart that countdown, so single blips don't);
+///   (a sound has to stay above the trigger for 0.4 s to restart that countdown, so short blips don't);
 /// - remove rumble below ~80 Hz first: the iPhone app gets the raw mic, and deep rumble
 ///   (air handling, traffic, the building) would otherwise keep resetting the countdown;
 /// - split clips at 20 minutes.
@@ -50,7 +50,7 @@ final class Detector: @unchecked Sendable {
     private let floorWindow: TimeInterval = 60
     private let targetRate = 16000.0
     private let highPassHz = 80.0
-    private let loudToResetSeconds = 0.2
+    private let loudToResetSeconds = 0.4
 
     // High-pass filter (2nd-order Butterworth), state kept across buffers.
     private var hb0: Float = 1, hb1: Float = 0, hb2: Float = 0, ha1: Float = 0, ha2: Float = 0
@@ -128,7 +128,7 @@ final class Detector: @unchecked Sendable {
             // Mutate in place (no copy of the growing clip on every buffer).
             rec!.chunks.append(chunk)
             rec!.count += chunk.count
-            if db > trigger - 3 {
+            if db > trigger {
                 loudStreak += seconds
                 rec!.peak = max(rec!.peak, db)
                 if loudStreak >= loudToResetSeconds {

@@ -227,6 +227,7 @@ details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size
 <script>
 (() => {
 "use strict";
+const LOUD_TO_RESET_MS = 400;
 const OUT_RATE = 16000, PREROLL_S = 3, TAIL_S = 4, MAX_CLIP_S = 20 * 60, TRIGGER_MS = 250, CALIB_MS = 2500;
 const $ = id => document.getElementById(id);
 
@@ -535,7 +536,12 @@ function onAudio(e) {
   }
   const r = S.rec;
   r.chunks.push(chunk); r.samples += chunk.length;
-  if (db > thr - 3) { r.lastLoud = now; r.lastLoudSample = r.samples; if (db > r.peak) r.peak = db; }
+  // Only a sound that stays above the trigger for 0.4 s restarts the quiet countdown; short blips don't.
+  if (db > thr) {
+    S.loudStreakMs += ms;
+    if (db > r.peak) r.peak = db;
+    if (S.loudStreakMs >= LOUD_TO_RESET_MS) { r.lastLoud = now; r.lastLoudSample = r.samples; }
+  } else S.loudStreakMs = 0;
   if (now - r.lastLoud > settings.silence * 1000) finishClip(true);
   else if (r.samples / OUT_RATE >= MAX_CLIP_S) finishClip(false);
 }
@@ -572,6 +578,7 @@ function pushPre(chunk) {
 
 function startClip(now, db) {
   S.rec = { start: now - S.preSamples / OUT_RATE * 1000, chunks: S.pre, samples: S.preSamples, lastLoud: now, lastLoudSample: S.preSamples, peak: db };
+  S.loudStreakMs = 0;
   S.pre = []; S.preSamples = 0; S.loudMs = 0;
   render();
 }
@@ -708,7 +715,8 @@ function tick() {
     const age = S.lastAudio ? Math.round((Date.now() - S.lastAudio) / 1000) : "—";
     $("diag").textContent = `mic ${mic} · audio ${S.ctx ? S.ctx.state : "none"} · last sound data ${age}s ago` + (S.rebuilds ? ` · restarts ${S.rebuilds}` : "");
   }
-  $("levelText").textContent = S.running ? Math.round(S.lastDb) + " dB" : "— dB";
+  $("levelText").textContent = !S.running ? "— dB"
+    : Math.round(S.lastDb) + " dB" + (S.rec ? ` · quiet ${fmtDur((Date.now() - S.rec.lastLoud) / 1000)} of ${fmtDur(settings.silence)}` : "");
   render();
 }
 setInterval(tick, 1000);
