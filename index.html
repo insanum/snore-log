@@ -112,6 +112,8 @@ details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size
 .version span{text-transform:uppercase;letter-spacing:.07em;font-family:var(--font);font-size:11px;margin-right:4px}
 .version b{font-weight:500;color:var(--text)}
 .version a{color:var(--moon);text-decoration:none}
+.update{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:10px 12px;border-radius:12px;background:#2a2516;border:1px solid #5a4a22;font-size:14px}
+.update button{background:var(--moon);color:#1d1606;font-weight:700;padding:8px 12px;border-radius:10px;white-space:nowrap}
 .logView{font:11px/1.45 var(--mono);color:var(--muted);white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;margin:10px 0 0;user-select:text;-webkit-user-select:text}
 #diagPanel .actions{margin-top:8px}
 #dim{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#3b4160}
@@ -123,6 +125,11 @@ details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size
 </head>
 <body>
 <main>
+  <div class="update" id="updateBar" hidden>
+    <span id="updateText">A new version is available.</span>
+    <button id="updateBtn">Update now</button>
+  </div>
+
   <header>
     <h1>Snore <span>Log</span></h1>
     <div class="storage" id="storage">—</div>
@@ -773,6 +780,32 @@ if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
   }
   $("vLoaded").textContent = fmtFull(new Date());
 })();
+
+/* ---------- update check ----------
+   GitHub Pages lets phones keep a saved copy of the page for a while, and Home Screen apps hold on to it.
+   Fetch the live page directly, compare its version with ours, and offer to load the new one. */
+const myVersion = ((document.querySelector('meta[name="build-sha"]') || {}).content) || "";
+let liveVersion = null, lastCheck = 0;
+async function checkForUpdate() {
+  if (!myVersion || myVersion.startsWith("__") || Date.now() - lastCheck < 30000) return;
+  lastCheck = Date.now();
+  try {
+    const r = await fetch(location.pathname + "?check=" + Date.now(), { cache: "no-store" });
+    const m = (await r.text()).match(/name="build-sha" content="([^"]+)"/);
+    const live = m && m[1];
+    if (!live || live.startsWith("__") || live === myVersion) return;
+    liveVersion = live;
+    $("updateText").textContent = `Version ${live} is available (you have ${myVersion}).`;
+    $("updateBar").hidden = false;
+    log(`update available: ${myVersion} → ${live}`);
+  } catch {}
+}
+$("updateBtn").onclick = async () => {
+  if (S.running) await stop();                       // saves the clip in progress
+  location.replace(location.pathname + "?v=" + (liveVersion || Date.now()));
+};
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
+checkForUpdate();
 
 render(); refreshList();
 })();
