@@ -301,7 +301,15 @@ function wire(ctx, stream) {
   log(`audio chain built · rate=${ctx.sampleRate} · ${where()}`);
   ctx.onstatechange = () => {
     log(`audio state → ${ctx.state}${ctx === S.ctx ? "" : " (old)"}`);
-    if (ctx !== S.ctx || !S.running || ctx.state === "running") return;
+    if (ctx !== S.ctx || !S.running) return;
+    if (ctx.state === "running") {
+      // iOS switches our audio back on when the alarm/call/Siri is over, even if the old mic stays muted.
+      if (S.interrupted) {
+        log("audio back on: interruption over; restarting the mic");
+        S.interrupted = 0; S.nextTry = Date.now() + 1000;
+      }
+      return;
+    }
     if (ctx.state === "interrupted") { systemInterrupted(); return; }
     if (S.interrupted) return;                        // e.g. "suspended" right after an interruption: don't fight it
     micLost(); ctx.resume().catch(() => {});
