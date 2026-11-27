@@ -8,6 +8,10 @@
 <meta name="apple-mobile-web-app-title" content="Snore Log">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0e1322">
+<!-- Filled in by the GitHub Pages workflow at publish time -->
+<meta name="build-sha" content="__BUILD_SHA__">
+<meta name="build-full-sha" content="__BUILD_FULL_SHA__">
+<meta name="build-time" content="__BUILD_TIME__">
 <link rel="apple-touch-icon" id="touchIcon" href="">
 <title>Snore Log</title>
 <style>
@@ -103,6 +107,10 @@ details.tips{background:transparent;border:1px solid var(--line);border-radius:1
 details.tips summary{cursor:pointer;font-weight:600}
 details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size:14px;display:flex;flex-direction:column;gap:6px}
 
+.version{display:flex;flex-wrap:wrap;gap:6px 18px;font:12px var(--mono);color:var(--muted);padding:4px 2px;font-variant-numeric:tabular-nums}
+.version span{text-transform:uppercase;letter-spacing:.07em;font-family:var(--font);font-size:11px;margin-right:4px}
+.version b{font-weight:500;color:var(--text)}
+.version a{color:var(--moon);text-decoration:none}
 #dim{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#3b4160}
 #dim .big{font:300 56px var(--mono);font-variant-numeric:tabular-nums}
 #dim .sub{font-size:14px}
@@ -168,6 +176,12 @@ details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size
       <li>If a fan or air purifier triggers clips all night, raise Sensitivity.</li>
     </ul>
   </details>
+
+  <footer class="version" id="version" aria-label="App version">
+    <div><span>Version</span> <a id="vSha" href="https://github.com/insanum/snore-log" target="_blank" rel="noopener">dev</a></div>
+    <div><span>Committed</span> <b id="vBuilt">—</b></div>
+    <div><span>Loaded</span> <b id="vLoaded">—</b></div>
+  </footer>
 </main>
 
 <div id="dim" hidden>
@@ -602,6 +616,23 @@ function clipRow(c) {
 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
   setNote("This browser can't use the microphone here. Open the page over https:// in Safari.", true);
 }
+/* ---------- version stamp ---------- */
+(() => {
+  const meta = n => (document.querySelector(`meta[name="${n}"]`) || {}).content || "";
+  const sha = meta("build-sha"), full = meta("build-full-sha"), when = meta("build-time");
+  const stamped = sha && !sha.startsWith("__");
+  const fmtFull = d => d.toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+  if (stamped) {
+    $("vSha").textContent = sha;
+    $("vSha").href = "https://github.com/insanum/snore-log/commit/" + full;
+    const d = new Date(when);
+    $("vBuilt").textContent = isNaN(d) ? when : fmtFull(d);
+  } else {
+    $("vSha").textContent = "dev (not published)";
+  }
+  $("vLoaded").textContent = fmtFull(new Date());
+})();
+
 render(); refreshList();
 })();
 </script>
