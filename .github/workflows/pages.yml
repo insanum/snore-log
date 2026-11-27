@@ -3,6 +3,7 @@ name: Publish to GitHub Pages
 on:
   push:
     branches: [main]
+    paths: ["web/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Build: copy the app and stamp the commit hash and time into it, then upload it for Pages.
+  # Build: copy the web app and stamp the commit hash and time into it, then upload it for Pages.
   build:
     runs-on: ubuntu-latest
     steps:
@@ -24,7 +25,7 @@ jobs:
       - name: Stamp commit hash and time into the page
         run: |
           mkdir -p _site
-          cp index.html _site/
+          cp -R web/. _site/
           touch _site/.nojekyll
           SHA=$(git rev-parse --short HEAD)
           FULL=$(git rev-parse HEAD)
