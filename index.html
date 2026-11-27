@@ -72,6 +72,7 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .primary.stop{background:#2a3352;color:var(--text)}
 .ghost{background:#1f2742;padding:15px 16px;border-radius:14px;font-weight:600}
 .note{font-size:13px;color:var(--muted);margin:0}
+.diag{font:11px var(--mono);color:var(--muted);margin:0;opacity:.8}
 .note.warn{color:var(--rec)}
 
 .settings{display:flex;flex-direction:column;gap:14px;padding:4px 2px}
@@ -138,9 +139,11 @@ details.tips ul{margin:10px 0 2px;padding-left:18px;color:var(--muted);font-size
       <div class="stat"><b id="sFloor">—</b><span>Room noise</span></div>
     </div>
     <div class="actions">
+      <button class="primary" id="resumeBtn" hidden>Resume listening</button>
       <button class="primary" id="startBtn">Start listening</button>
       <button class="ghost" id="dimBtn" hidden>Dim</button>
     </div>
+    <p class="diag" id="diag" hidden></p>
     <p class="note" id="note">Tap Start before you go to sleep. Leave this screen open and the phone plugged in.</p>
   </section>
 
@@ -231,6 +234,7 @@ if (navigator.storage && navigator.storage.persist) navigator.storage.persist().
 const S = { running: false, ctx: null, stream: null, src: null, node: null, sink: null,
   floor: null, calib: [], calibMs: 0, loudMs: 0, rec: null, pre: [], preSamples: 0,
   sessionStart: 0, clips: 0, recSeconds: 0, hist: [], lastDb: -100, wakeLock: null, ds: null };
+if (location.hostname === "localhost") window.__snore = S;   // test hook, local only
 
 function makeDownsampler(inRate) {
   const ratio = inRate / OUT_RATE; let pos = 0, sum = 0, n = 0;
@@ -247,37 +251,56 @@ function makeDownsampler(inRate) {
 const MIC_OPTS = { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
 const MIN_GAP_MS = 5000;
 
-function watchTracks() {
-  S.stream.getAudioTracks().forEach(t => {
-    t.onended = () => micLost();
-    t.onmute = () => micLost();
-    t.onunmute = () => { if (S.ctx) S.ctx.resume().catch(() => {}); };
+function watchTracks(stream) {
+  stream.getAudioTracks().forEach(t => {
+    t.onended = () => { if (stream === S.stream) micLost(); };
+    t.onmute = () => { if (stream === S.stream) micLost(); };
+    t.onunmute = () => { if (stream === S.stream && S.ctx) S.ctx.resume().catch(() => {}); };
   });
 }
 
+/* Build the audio chain: mic stream → processor that measures and keeps the sound. */
+function wire(ctx, stream) {
+  S.ctx = ctx; S.stream = stream;
+  S.ds = makeDownsampler(ctx.sampleRate);
+  S.src = ctx.createMediaStreamSource(stream);
+  S.node = ctx.createScriptProcessor(4096, 1, 1);
+  S.sink = ctx.createGain(); S.sink.gain.value = 0;
+  S.src.connect(S.node); S.node.connect(S.sink); S.sink.connect(ctx.destination);
+  S.node.onaudioprocess = onAudio;
+  ctx.onstatechange = () => {
+    if (ctx !== S.ctx || !S.running || ctx.state === "running") return;
+    micLost(); ctx.resume().catch(() => {});
+  };
+  watchTracks(stream);
+}
+
+function unwire() {
+  try { S.node && (S.node.onaudioprocess = null); } catch {}
+  try { S.src && S.src.disconnect(); S.node && S.node.disconnect(); S.sink && S.sink.disconnect(); } catch {}
+  const c = S.ctx;
+  if (c) { c.onstatechange = null; c.close().catch(() => {}); }
+  S.ctx = S.src = S.node = S.sink = null;
+}
+
+const newContext = () => { const AC = window.AudioContext || window.webkitAudioContext; return new AC(); };
+
 async function start() {
+  const ctx = newContext();                 // created during the tap, so iOS lets it run
+  const resumed = ctx.resume().catch(() => {});
+  let stream;
   try {
-    S.stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+    stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
   } catch (e) {
+    ctx.close().catch(() => {});
     setNote("Microphone access was refused. Allow the microphone for this page in Settings → Safari → Microphone, then try again.", true);
     return;
   }
-  const AC = window.AudioContext || window.webkitAudioContext;
-  S.ctx = new AC();
-  await S.ctx.resume().catch(() => {});
-  S.ds = makeDownsampler(S.ctx.sampleRate);
-  S.src = S.ctx.createMediaStreamSource(S.stream);
-  S.node = S.ctx.createScriptProcessor(4096, 1, 1);
-  S.sink = S.ctx.createGain(); S.sink.gain.value = 0;
-  S.src.connect(S.node); S.node.connect(S.sink); S.sink.connect(S.ctx.destination);
-  S.node.onaudioprocess = onAudio;
-  S.ctx.onstatechange = () => {
-    if (!S.running || !S.ctx || S.ctx.state === "running") return;
-    micLost(); S.ctx.resume().catch(() => {});
-  };
-  watchTracks();
+  await resumed;
+  wire(ctx, stream);
   Object.assign(S, { running: true, micOk: false, gapStart: null, lastAudio: Date.now(), zeroMs: 0, floor: null, calib: [], calibMs: 0,
-    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, mutedSince: 0, clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
+    loudMs: 0, rec: null, pre: [], preSamples: 0, sessionStart: Date.now(), wakeWarned: false, mutedSince: 0, backSince: 0,
+    rebuilds: 0, clips: 0, recSeconds: 0, gapMs: 0, hist: [] });
   requestWake();
   setNote("Measuring room noise for a few seconds… stay quiet.");
   render();
@@ -288,16 +311,17 @@ function micLost() {
   if (!S.running || !S.micOk) return;
   S.micOk = false;
   S.gapStart = S.lastAudio || Date.now();
+  S.backSince = 0; S.rebuilds = 0;
   if (S.rec) finishClip(false);
   S.pre = []; S.preSamples = 0; S.loudMs = 0;
   clearTimeout(S.noteTimer);
-  setNote("Mic paused at " + fmtClock(S.gapStart) + ". It restarts when Snore Log is back on screen. Tap the screen if it doesn't.", true);
+  setNote("Mic paused at " + fmtClock(S.gapStart) + ". It restarts when Snore Log is back on screen. If it doesn't, tap Resume listening.", true);
   render();
 }
 
 /* Mic audio is flowing again: close the gap. */
 function micBack(now) {
-  S.micOk = true; S.zeroMs = 0; S.mutedSince = 0;
+  S.micOk = true; S.zeroMs = 0; S.mutedSince = 0; S.backSince = 0; S.rebuilds = 0;
   if (S.gapStart) {
     const start = S.gapStart; S.gapStart = null;
     saveGap(start, now);
@@ -315,49 +339,64 @@ function saveGap(start, end) {
   putClip({ id: "g" + start, type: "gap", start, end, duration: (end - start) / 1000, size: 0 }).then(refreshList).catch(() => {});
 }
 
-async function restartMic() {
-  if (!S.running || S.micOk || S.restarting) return;
+/* Bring the mic back after the app returns to the screen.
+   iOS pauses (mutes) the mic in the background and usually un-pauses it on return, but the audio chain can stay
+   silent afterwards, so if no sound arrives we rebuild the chain. Asking for a new mic can make iOS show the
+   permission prompt, so that only happens when the mic has ended, stays paused, rebuilding didn't help,
+   or the user tapped Resume listening. */
+async function restartMic(fromTap) {
+  if (!S.running || S.micOk || !S.gapStart || S.restarting) return;
+  if (document.visibilityState !== "visible") return;
   S.restarting = true;
   try {
-    // When the app goes to the background, iOS pauses (mutes) the mic rather than ending it, and un-pauses it on return.
-    // Asking for a new mic makes iOS show the permission prompt again, so only do that if the mic has really ended,
-    // or if it is still paused well after the app came back.
+    const now = Date.now();
+    if (!S.backSince) S.backSince = now;
     const tracks = S.stream ? S.stream.getAudioTracks() : [];
     const ended = !tracks.some(t => t.readyState === "live");
     const muted = !ended && tracks.every(t => t.muted);
-    if (muted && !S.mutedSince) S.mutedSince = Date.now();
-    const stuck = muted && Date.now() - S.mutedSince > 10000;
-    if (ended || stuck) {
-      S.mutedSince = 0;
-      try { S.src && S.src.disconnect(); } catch {}
-      S.stream && S.stream.getTracks().forEach(t => t.stop());
-      S.stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
-      S.src = S.ctx.createMediaStreamSource(S.stream);
-      S.src.connect(S.node);
-      watchTracks();
+    if (muted && !S.mutedSince) S.mutedSince = now;
+    const stuck = muted && now - S.mutedSince > 10000;
+    const silent = !ended && !muted && now - Math.max(S.lastAudio, S.backSince) > 2500;
+    if (!(fromTap || ended || stuck || silent)) { S.ctx && S.ctx.resume().catch(() => {}); return; }
+    if (!fromTap && S.rebuilds >= 4) return;          // stop retrying on our own; the Resume button stays available
+
+    const ctx = newContext();                          // made before any await so a tap counts as the user gesture
+    const resumed = ctx.resume().catch(() => {});
+    let stream = S.stream;
+    const needNewMic = ended || muted || S.rebuilds >= 2 || (fromTap && S.rebuilds >= 1);
+    if (needNewMic) {
+      const old = stream;
+      stream = await navigator.mediaDevices.getUserMedia(MIC_OPTS);
+      if (old && old !== stream) old.getTracks().forEach(t => t.stop());
     }
-    await S.ctx.resume();
+    unwire();
+    await resumed;
+    wire(ctx, stream);
+    S.rebuilds++; S.backSince = Date.now(); S.mutedSince = 0;
     requestWake();
-  } catch {
-    setNote("Couldn't restart the microphone. Tap the screen to try again.", true);
+  } catch (e) {
+    setNote("Couldn't restart the microphone (" + ((e && e.name) || "error") + "). Tap Resume listening to try again.", true);
+  } finally {
+    S.restarting = false;
+    render();
   }
-  S.restarting = false;
 }
 
 /* If no audio arrives for a few seconds while the page is open, treat the mic as lost and try to bring it back. */
 setInterval(() => {
   if (!S.running) return;
   if (S.micOk && Date.now() - S.lastAudio > 4000) micLost();
-  if (!S.micOk && S.gapStart && document.visibilityState === "visible") restartMic();
+  if (!S.micOk) restartMic(false);
 }, 2000);
 
 async function stop() {
   if (S.running && !S.micOk && S.gapStart) { saveGap(S.gapStart, Date.now()); S.gapStart = null; }
   S.running = false;
   if (S.rec) finishClip(false);
-  try { S.node && (S.node.onaudioprocess = null); S.src && S.src.disconnect(); S.node && S.node.disconnect(); } catch {}
-  S.stream && S.stream.getTracks().forEach(t => t.stop());
-  S.ctx && S.ctx.close().catch(() => {});
+  const stream = S.stream;
+  unwire();
+  stream && stream.getTracks().forEach(t => t.stop());
+  S.stream = null;
   releaseWake(); hideDim();
   setNote("Stopped. Your recordings are below.");
   render();
@@ -368,7 +407,7 @@ function onAudio(e) {
   const input = e.inputBuffer.getChannelData(0);
   let sq = 0; for (let i = 0; i < input.length; i++) sq += input[i] * input[i];
   const db = 20 * Math.log10(Math.sqrt(sq / input.length) + 1e-9);
-  const ms = input.length / S.ctx.sampleRate * 1000, now = Date.now();
+  const ms = input.length / e.inputBuffer.sampleRate * 1000, now = Date.now();
   // A real microphone never delivers perfect digital silence; iOS does when it has taken the mic away.
   if (sq === 0) {
     S.zeroMs += ms;
@@ -457,14 +496,14 @@ async function requestWake() {
 function releaseWake() { try { S.wakeLock && S.wakeLock.release(); } catch {} S.wakeLock = null; }
 document.addEventListener("visibilitychange", () => {
   if (!S.running) return;
-  if (document.visibilityState === "hidden") { S.mutedSince = 0; micLost(); }   // iOS pauses the mic when the page leaves the screen
-  else { requestWake(); restartMic(); }
+  if (document.visibilityState === "hidden") { S.mutedSince = 0; S.backSince = 0; micLost(); }   // iOS pauses the mic when the page leaves the screen
+  else { requestWake(); restartMic(false); }
 });
 // Any tap counts as the user gesture iOS may want before audio can restart.
-document.addEventListener("pointerdown", () => { if (S.running && !S.micOk && S.gapStart) restartMic(); }, true);
+$("resumeBtn").onclick = () => restartMic(true);
 function showDim() { $("dim").hidden = false; }
 function hideDim() { $("dim").hidden = true; }
-$("dim").onclick = hideDim;
+$("dim").onclick = () => { hideDim(); if (S.running && !S.micOk && S.gapStart) restartMic(true); };
 $("dimBtn").onclick = showDim;
 $("startBtn").onclick = () => S.running ? stop() : start();
 
@@ -481,6 +520,7 @@ function render() {
   const off = S.running && !S.micOk && !!S.gapStart;
   pill.className = "pill" + (!S.running ? "" : off ? " off" : S.rec ? " recording" : " listening");
   st.textContent = !S.running ? "Not listening" : off ? "Mic off" : S.rec ? "Recording" : S.floor === null ? "Calibrating" : "Listening";
+  $("resumeBtn").hidden = !off;
   $("startBtn").textContent = S.running ? "Stop" : "Start listening";
   $("startBtn").classList.toggle("stop", S.running);
   $("dimBtn").hidden = !S.running;
@@ -497,6 +537,13 @@ function tick() {
   $("sClips").textContent = S.clips + (S.rec ? 1 : 0);
   $("sRecTime").textContent = fmtDur(S.recSeconds + live);
   $("sFloor").textContent = S.floor === null ? "—" : Math.round(S.floor) + " dB";
+  $("diag").hidden = !S.running;
+  if (S.running) {
+    const t = S.stream && S.stream.getAudioTracks()[0];
+    const mic = !t ? "none" : t.readyState === "ended" ? "ended" : t.muted ? "paused" : "live";
+    const age = S.lastAudio ? Math.round((Date.now() - S.lastAudio) / 1000) : "—";
+    $("diag").textContent = `mic ${mic} · audio ${S.ctx ? S.ctx.state : "none"} · last sound data ${age}s ago` + (S.rebuilds ? ` · restarts ${S.rebuilds}` : "");
+  }
   $("levelText").textContent = S.running ? Math.round(S.lastDb) + " dB" : "— dB";
   render();
 }
