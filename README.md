@@ -47,7 +47,7 @@ Both use the same listening rules. The iPhone app can do more because iOS lets r
 
 | | Web app | iPhone app (App Store) | Build it yourself |
 |---|---|---|---|
-| **Price** | Free | Free; keeps the latest night. One-time **Unlock all nights** purchase keeps every night | Free, everything unlocked |
+| **Price** | Free | Free; keeps the latest night. **Unlock all nights** is a one-time **$2.99** purchase (no subscription) | Free, everything unlocked |
 | **Install** | None: open in Safari, add to Home Screen | App Store *(coming soon)* | Mac with Xcode; a free Apple Account re-signs every 7 days |
 | **Screen during the night** | Must stay on with the app open (a **Dim** button blacks it out) | Lock it; keeps recording in the background | Lock it |
 | **Your alarm** | Rings; listening resumes after you stop it | Rings; listening resumes after you stop it | Same |
@@ -187,11 +187,13 @@ ios/                    iPhone app (SwiftUI, iOS 17+)
     Recorder.swift      microphone, background recording, alarm/call handling
     ClipWriter.swift    saves clips as .m4a
     Models.swift        nights, clips, storage
-    Purchases.swift     one-time unlock (StoreKit 2)
+    Purchases.swift     one-time $2.99 unlock (StoreKit 2)
+    PrivacyInfo.xcprivacy  privacy manifest (no tracking, no data collected)
     *View.swift         screens: monitor, nights, night detail with chart, settings
   Config/
     Info.plist          background audio mode
     SnoreLog.storekit   StoreKit test configuration
+  APP_STORE.md          publishing guide: listing text, purchase setup, review notes, checklist
 .github/workflows/
   pages.yml             publishes web/ to GitHub Pages, stamping the commit hash
   ios.yml               compiles the iPhone app on macOS for every change under ios/

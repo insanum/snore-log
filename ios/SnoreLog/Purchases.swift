@@ -42,7 +42,7 @@ final class Purchases: ObservableObject {
         return purchased
     }
 
-    var priceText: String { product?.displayPrice ?? "$3.99" }
+    var priceText: String { product?.displayPrice ?? "$2.99" }
 
     func refresh() async {
         if product == nil {

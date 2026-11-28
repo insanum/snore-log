@@ -41,6 +41,7 @@ struct SettingsView: View {
                 }
                 #if DEBUG
                 Toggle("Simulate free version", isOn: $simulateFree)
+                Button("Add sample night (for screenshots)") { store.addSampleNight() }
                 Text("Debug builds are always unlocked. Turn this on to test the free limit and the purchase flow with the StoreKit test file.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -54,7 +55,9 @@ struct SettingsView: View {
 
             Section {
                 Link("Source code on GitHub", destination: URL(string: "https://github.com/insanum/snore-log")!)
+                #if DEBUG
                 Link("Web version", destination: URL(string: "https://insanum.github.io/snore-log/app/")!)
+                #endif
                 Link("Snore Log website", destination: URL(string: "https://insanum.github.io/snore-log/")!)
                 Link("Privacy", destination: URL(string: "https://insanum.github.io/snore-log/privacy.html")!)
                 LabeledContent("Version", value: appVersion)
