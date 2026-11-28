@@ -37,6 +37,7 @@ Free, open source (MIT), no account, no subscription. Recordings stay on your de
 - **Stops after a stretch of quiet** you choose, saves the clip with its date and time, and keeps listening.
 - **Groups everything by night**, with each clip's length and loudness.
 - **Plays, shares and deletes** clips; delete a whole night in one go.
+- **Easy to listen through:** drag the scrub bar, jump back or forward 10 seconds, or **hold the forward button to play at 2×** (voices keep their normal pitch). Pausing keeps your place.
 - **Shows gaps honestly**: if an alarm, a call or Siri took the microphone, a **Mic off** entry shows which minutes weren't covered.
 - **Gets out of the way of your alarm**: it steps aside when iPhone needs the audio and starts listening again when you stop the alarm.
 
@@ -115,9 +116,11 @@ The web app and iPhone app use the same rules:
 2. **Keeps tracking the room.** The room level is the quietest 10% of the last 60 seconds, updated all night, *including while recording*. Snoring has quiet gaps between breaths, so the room level holds steady while you snore; a steady new noise (fan, heater) lifts it within about a minute, so a recording can't run until morning.
 3. **Triggers on louder sounds.** A clip starts when the sound is **sensitivity** dB above the room (default **+12 dB**) for at least a quarter of a second.
 4. **Keeps a lead-in.** Each clip includes the **3 seconds before** the trigger.
-5. **Ends after quiet.** The clip ends after the **silence** time you choose (default **2 minutes**) without loud sounds; the quiet tail is trimmed to 4 seconds.
+5. **Ends after quiet.** The clip ends after the **silence** time you choose (default **2 minutes**) without loud sounds; the quiet tail is trimmed to 4 seconds. Only a sound that stays **above the trigger for 0.4 seconds in a row** restarts this countdown, so clicks, rustles and other short blips don't keep a recording going. While recording, the screen shows the countdown, e.g. **Quiet 0:23 of 1:00**.
 6. **Splits long clips** at 20 minutes.
 7. **Saves small, audible files.** Audio is downsampled to 16 kHz mono (plenty for snoring), and quiet clips are boosted (up to 8×) so they're easy to hear.
+
+The iPhone app also **filters out deep rumble below about 80 Hz** (air handling, traffic, the building) before measuring. It uses the raw microphone so levels stay consistent all night, and without the filter that rumble could keep recordings from ending. Snoring is well above 80 Hz. The web app gets audio that iPhone has already cleaned up, so it doesn't need this.
 
 ## Settings and tuning
 
@@ -132,8 +135,9 @@ The web app and iPhone app use the same rules:
 - Clips are mostly rustling, a partner or other noises: raise sensitivity to **+15 to +18**.
 - Quiet snoring is missing: lower it to **+8 to +10**.
 - Clips are split into many short pieces: lengthen the silence time.
+- Recordings run much longer than the silence time: watch the **Quiet** countdown while it records. If it keeps dropping back to 0:00 when the room seems silent, something in the room is louder than the trigger; raise sensitivity a few dB.
 
-The yellow line on the live graph is the trigger level: sounds above it are recorded.
+The yellow line on the live graph is the trigger level: sounds above it are recorded. Next to the live level, the app shows the trigger level and, while recording, the quiet countdown.
 
 ## Alarms, calls and "Mic off"
 
@@ -165,6 +169,8 @@ Full text: [privacy page](https://insanum.github.io/snore-log/privacy.html).
 **iPhone app**
 - *"Microphone access is off":* **Settings → Privacy & Security → Microphone → Snore Log**.
 - *No clips after a night:* check the night's chart. If the level line never crosses the dashed trigger line, lower the sensitivity.
+- *Clips much longer than expected:* see "Recordings run much longer than the silence time" under [Settings and tuning](#settings-and-tuning).
+- *App stopped opening after a week (self-built):* free Apple Account installs expire after 7 days. Connect the phone and press Run in Xcode again; recordings are kept.
 
 ## Repository layout
 

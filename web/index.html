@@ -224,7 +224,7 @@ footer nav{display:flex;flex-wrap:wrap;gap:18px}
         <li><h3>Learns your room</h3><p>For the first few seconds it measures how loud your bedroom normally is: a fan, the heating, traffic outside.</p></li>
         <li><h3>Waits for a louder sound</h3><p>A clip starts when a sound is clearly louder than the room, by <code>+12 dB</code> unless you change it, for at least a quarter of a second.</p></li>
         <li><h3>Keeps the lead-in</h3><p>Each clip includes the 3 seconds <em>before</em> the sound, so you hear the whole snore, not just its peak.</p></li>
-        <li><h3>Stops after quiet</h3><p>After a stretch of silence you choose (2 minutes by default), the clip is saved with its date and time, and listening carries on.</p></li>
+        <li><h3>Stops after quiet</h3><p>After a stretch of silence you choose (2 minutes by default), the clip is saved with its date and time, and listening carries on. Clicks and rustles don't restart the countdown.</p></li>
       </ol>
       <p class="note">The room level keeps updating all night, using the quietest moments of the last minute. If a fan switches on at 3 am, the trigger moves up with it instead of recording until morning.</p>
     </div>
@@ -232,12 +232,13 @@ footer nav{display:flex;flex-wrap:wrap;gap:18px}
 
   <section>
     <div class="wrap morning">
-      <div class="phone"><img src="img/morning-list.webp" alt="Snore Log's recordings list for one night: five clips with times, lengths and loudness, and one Mic off entry" width="780" height="1205" loading="lazy"></div>
+      <div class="phone"><img src="img/morning-list.webp" alt="Snore Log's recordings list for one night: clips with times, lengths and loudness, one playing with a scrub bar and 10-second skip buttons, and a Mic off entry" width="780" height="1205" loading="lazy"></div>
       <div>
         <h2>Your night, ready in the morning</h2>
         <p class="sub" style="margin-bottom:28px">Open the app with your coffee. Everything is grouped by night.</p>
         <ul class="feature-list">
-          <li><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg></span><div><h3>Play any clip</h3><p>Each recording shows when it started, how long it lasted and how loud it got.</p></div></li>
+          <li><span class="ic"><svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></svg></span><div><h3>Play any clip</h3><p>Each recording shows when it started, how long it lasted and how loud it got. Pausing keeps your place.</p></div></li>
+          <li><span class="ic"><svg viewBox="0 0 24 24"><path d="M13 19l9-7-9-7v14zM2 19l9-7-9-7v14z"/></svg></span><div><h3>Skim a long one</h3><p>Drag to any point, jump 10 seconds back or forward, or hold the forward button to play at 2× while you listen for the loud parts.</p></div></li>
           <li><span class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg></span><div><h3>Save or share</h3><p>Send a clip to your partner, keep it in Files, or bring it to a doctor's appointment.</p></div></li>
           <li><span class="ic r"><svg viewBox="0 0 24 24"><path d="M9 4a3 3 0 0 1 6 0v6M15 14a3 3 0 0 1-5.6 1.5M5 11a7 7 0 0 0 11.5 5.3M12 18v3M3 3l18 18"/></svg></span><div><h3>Honest gaps</h3><p>If a phone call or alarm took the microphone, a <span class="mono" style="color:var(--rec)">Mic off</span> entry shows exactly which minutes weren't covered. Silence in the list really means silence.</p></div></li>
           <li><span class="ic"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></span><div><h3>Tidy up</h3><p>Delete one clip or a whole night. The list shows how much space each night uses.</p></div></li>
