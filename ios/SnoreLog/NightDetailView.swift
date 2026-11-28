@@ -189,7 +189,11 @@ private struct PlaybackControls: View {
                 Button {
                     player.skip(by: -10)
                 } label: {
-                    Image(systemName: "gobackward.10").font(.title3)
+                    Image(systemName: "gobackward.10")
+                        .font(.title3)
+                        .foregroundStyle(Theme.moon)
+                        .frame(width: 44, height: 36)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Back 10 seconds")
