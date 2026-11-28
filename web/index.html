@@ -377,15 +377,17 @@ open snore-log/ios/SnoreLog.xcodeproj</pre>
 
 <script>
 /* Hero demo: a simulated night trace run through the same rules as the app (room level, +12 dB trigger,
-   3 s lead-in, stop after quiet). The silence timeout is shortened so a clip completes on screen. */
+   a quarter of a second above the line to start, 0.4 s above it to keep a clip going, lead-in, stop after quiet).
+   Short clicks cross the line but are ignored. The lead-in and silence time are shortened so a clip completes on screen. */
 (() => {
   const cv = document.getElementById("demo"), g = cv.getContext("2d");
   const pill = document.getElementById("demoPill"), stateEl = document.getElementById("demoState");
   const clockEl = document.getElementById("demoClock"), savedEl = document.getElementById("demoSaved");
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const TICK = 0.1, N = 300, ROOM = -60, SENS = 12, TRIG = ROOM + SENS, PRE = 15, QUIET = 25;
-  const vals = [], recFlags = [];
-  let t = 0, burstPhase = 0, active = false, phaseLeft = 120, rec = false, lastLoud = 0, recStart = 0;
+  const START_TICKS = 3, KEEP_TICKS = 4;                 // 0.25 s to start a clip, 0.4 s to keep it going
+  const vals = [], recFlags = [], clickFlags = [];
+  let t = 0, burstPhase = 0, active = false, phaseLeft = 120, rec = false, lastLoud = 0, recStart = 0, streak = 0;
   let clock = new Date(2026, 0, 1, 1, 14, 2).getTime();
   const rand = (a, b) => a + Math.random() * (b - a);
 
@@ -393,18 +395,22 @@ open snore-log/ios/SnoreLog.xcodeproj</pre>
     t++;
     clock += 1000 * 4;                                   // the demo clock runs fast
     if (--phaseLeft <= 0) { active = !active; phaseLeft = active ? Math.round(rand(50, 95)) : Math.round(rand(170, 260)); burstPhase = 0; }
-    let v = ROOM + rand(-2.2, 2.2);
+    let v = ROOM + rand(-2.2, 2.2), click = false;
     if (active) {
       burstPhase = (burstPhase + 1) % 30;                // a few snores, about 3 seconds apart
       if (burstPhase < 11) v = Math.max(v, -36 - Math.abs(burstPhase - 6) * 3 + rand(-3, 3));
+    } else if (Math.random() < 1 / 160) {
+      v = -40 + rand(-4, 3); click = true;               // a short click: crosses the line for an instant
     }
-    vals.push(v); recFlags.push(false);
-    if (vals.length > N) { vals.shift(); recFlags.shift(); }
+    vals.push(v); recFlags.push(false); clickFlags.push(click);
+    if (vals.length > N) { vals.shift(); recFlags.shift(); clickFlags.shift(); }
     const i = vals.length - 1;
-    if (v > TRIG) {
-      lastLoud = t;
-      if (!rec) { rec = true; recStart = clock; for (let k = Math.max(0, i - PRE); k < i; k++) recFlags[k] = true; }
+    streak = v > TRIG ? streak + 1 : 0;
+    if (!rec && streak >= START_TICKS) {
+      rec = true; recStart = clock; lastLoud = t;
+      for (let k = Math.max(0, i - PRE - streak); k < i; k++) recFlags[k] = true;
     }
+    if (rec && streak >= KEEP_TICKS) lastLoud = t;
     if (rec) {
       recFlags[i] = true;
       if (t - lastLoud > QUIET) {
@@ -433,10 +439,23 @@ open snore-log/ios/SnoreLog.xcodeproj</pre>
     for (let i = 0; i < vals.length; i++) {
       const x = (N - vals.length + i) * bw, yy = y(vals[i]);
       g.fillStyle = vals[i] > TRIG ? "#ff7a6b" : "#5c6aa0";
-      g.fillRect(x, yy, Math.max(1, bw - 0.6 * dpr), H - yy);
+      g.fillRect(Math.floor(x), yy, Math.max(1, Math.round(bw - 0.4 * dpr)), H - yy);   // whole pixels: thin bars stay their true colour
     }
     // trigger + room lines
     g.fillStyle = "#f2c46d"; g.fillRect(0, y(TRIG), W, Math.max(1, dpr));
+    // label short clicks, which cross the line but don't start or extend a clip
+    g.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+    g.fillStyle = "#939ab8";
+    const label = "click · ignored", tw = g.measureText(label).width;
+    let lastEnd = -Infinity;
+    for (let i = 0; i < clickFlags.length; i++) {
+      if (!clickFlags[i]) continue;
+      const x = (N - vals.length + i) * bw;
+      const lx = Math.min(Math.max(2 * dpr, x - tw / 2), W - tw - 2 * dpr);
+      if (lx < lastEnd + 10 * dpr) continue;             // don't let labels overlap
+      g.fillText(label, lx, Math.max(12 * dpr, y(vals[i]) - 6 * dpr));
+      lastEnd = lx + tw;
+    }
     g.fillStyle = "rgba(147,154,184,.45)";
     for (let x = 0; x < W; x += 8 * dpr) g.fillRect(x, y(ROOM + 2.5), 4 * dpr, Math.max(1, dpr));
     g.font = `${11 * dpr}px ui-monospace, Menlo, monospace`;
